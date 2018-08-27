@@ -1,0 +1,21 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>netcoreapp2.1</TargetFramework>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="LogHansei.fs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Hansei.Continuation\Hansei.Core.fsproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Reference Include="Prelude">
+      <HintPath>..\..\Prelude\Prelude\bin\Release\net45\Prelude.dll</HintPath>
+    </Reference>
+  </ItemGroup>
+
+</Project>

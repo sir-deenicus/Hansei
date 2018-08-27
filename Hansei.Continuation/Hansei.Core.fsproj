@@ -1,0 +1,19 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFrameworks>net45;netstandard2.0;netcoreapp2.0</TargetFrameworks>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="Hansei.Continuations.fs" />
+    <Compile Include="Commons.fs" />
+    <Compile Include="Utils.fs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Reference Include="Prelude">
+      <HintPath>..\..\Prelude\Prelude\bin\Release\net45\Prelude.dll</HintPath>
+    </Reference>
+  </ItemGroup>
+
+</Project>
