@@ -50,13 +50,11 @@ let explore (maxdepth : int option) (choices : QuantumProbabilitySpace<'T>) =
 
 //===============
 
-let observe test = cont { if not test then return! fail() }
-
 let observeState test = cont { if not test then return! fail() }
 
 let filterByObserving f p = cont {
     let! x = p
-    do! observe (f x)
+    do! observeState (f x)
     return x }   
 
 let inline qexact_reify model   =  explore None     (qreify0 model)  

@@ -185,13 +185,6 @@ let sample_importance selector maxdpeth nsamples (thunk)  =
 
 let observe test = cont { if not test then return! fail() }
 
-let filterDistribution f p = cont {
-    let! x = p
-    do! observe (f x)
-    return x
-}
-
-
 let inline exact_reify model   =  explore None     (reify0 model)  
 let inline limit_reify n model =  explore (Some n) (reify0 model)  
                  
@@ -306,19 +299,6 @@ module Distributions =
            return! dirichlet (draws - 1) d'         
   }
 
-  ////stepsizing = 10 for 0..0.1..1
-  let gamma stepsizing a = 
-      let d = a - 1./3. 
-      let c = 1./(sqrt 9. * d)
-      let rec loop () = cont {    
-          let! z = normal 0. 1. stepsizing 1 
-          let! u = uniform_float stepsizing
-          let v = (1. + c * z) ** 3.
-          let dv = d * v
-          if z > -1./c && log u < 0.5 * z**2. + d - dv + d * log v then return round 1 dv 
-          else return! loop()
-      }
-      loop ()
 
   let rec drawrandom draws n pd = cont {
       if n = 0 then return draws

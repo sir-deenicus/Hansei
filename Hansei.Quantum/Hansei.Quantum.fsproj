@@ -6,7 +6,7 @@
 
   <ItemGroup>
     <Compile Include="Continuation.fs" />
-    <Compile Include="Hansei.fs" />
+    <Compile Include="Hansei.Quantum.fs" />
     <Compile Include="Utils.fs" />
   </ItemGroup>
 

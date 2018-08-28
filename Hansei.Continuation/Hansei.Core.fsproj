@@ -6,7 +6,7 @@
 
   <ItemGroup>
     <Compile Include="Hansei.Continuations.fs" />
-    <Compile Include="Commons.fs" />
+    <Compile Include="TextUtils.fs" />
     <Compile Include="Utils.fs" />
   </ItemGroup>
 

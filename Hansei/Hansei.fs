@@ -15,7 +15,7 @@ open Prelude.Math
 //Ocaml style comments in code below are Oleg's
 
 //This framework is much more flexible than the system described in Expert F#. 
-//A continuation monad is used to describe distributions as lazy continuation trees.
+//A continuation monad is used to describe distributions as lazy continuation trees (lazily generated nested lists).
 //Better base for http://dippl.org 
  
 //==========
@@ -23,6 +23,14 @@ open Prelude.Math
 let distribution ch k = List.map (fun (p,v) -> (p, Continued(lazy(k v)))) ch : ProbabilitySpace<_>
 
 let fail () = distribution []
+
+let observe test = cont { if not test then return! fail() }
+
+let filterDistribution f p = cont {
+    let! x = p
+    do! observe (f x)
+    return x
+}   
 
 let inline reify0 m = m (fun x -> [(1.0, Value x)] : ProbabilitySpace<_>)
 
@@ -262,14 +270,6 @@ let inline sample_parallel depth n maxdepth (distr) samples =
     |> List.groupBy snd 
     |> List.map (fun (v,ps) -> List.averageBy fst ps, v) : ProbabilitySpace<_>
 
-          
-let observe test = cont { if not test then return! fail() }
-
-let filterDistribution f p = cont {
-    let! x = p
-    do! observe (f x)
-    return x
-}   
 
 let inline exact_reify model   =  explore None     (reify0 model)  
 let inline limit_reify n model =  explore (Some n) (reify0 model)  

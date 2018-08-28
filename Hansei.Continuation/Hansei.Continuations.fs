@@ -36,3 +36,14 @@ let reflect tree k =
    a -> b to a generally faster function
 *)
 let variable_elim reify f arg = reflect (reify (f arg))    
+
+let filterContinuation f p = cont {
+    let! x = p
+    do! (f x)
+    return x
+}   
+
+let mapContinuation f thunk = cont {
+    let! x = thunk
+    return f x
+}

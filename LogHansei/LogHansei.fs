@@ -54,7 +54,7 @@ let distribution ch k = List.map (fun (p,v) -> (log p, Continued(lazy(k v)))) ch
 
 let fail () = distribution []
 
-let guard test = cont { if not test then return! fail() }
+let observe test = cont { if not test then return! fail() }
 
 let reify0 m = m (fun x -> [(0., Value x)])
 
@@ -218,11 +218,6 @@ let sample_importance selector maxdpeth nsamples (thunk)  =
 let inline exact_reify model   =  explore None     (reify0 model)  
 let inline limit_reify n model =  explore (Some n) (reify0 model)  
 
-let filterDistribution f p = cont {
-    let! x = p
-    do! guard (f x)
-    return x
-}
 //=-=-=-=-=-=-=-=-=-=
 module Distributions = 
   let bernoulli p = distribution [(p, true); (1.0-p, false)]

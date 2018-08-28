@@ -89,13 +89,6 @@ let inline normalize (choices) =
   List.map (fun (p, v) -> (p/sum, v)) choices
 
 
-let mapDistribution f pr = cont {
-    let! x = pr
-    return f x
-}
-////////////
-
-
 //////////
 
 let inline mkProbabilityMap t =
