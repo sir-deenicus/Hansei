@@ -1,16 +1,14 @@
 module Hansei.Core
 
-open System
 open Hansei.Continuation
 open Hansei.Utils
-open Prelude.Parallel
 open Prelude.Common
 open Prelude.Math
 //open FSharp.Collections.ParallelSeq
 
 //Core of Hansei modified from base:
 //https://gist.github.com/einblicker/3245547#file-hansei
-//Remaining and majority of code (till line 250) ported/lightly modified from
+//Remaining and majority of code (till line 250) ported and modified to work with continuation monad from
 //http://okmij.org/ftp/kakuritu/Hansei.html
 //Ocaml style comments in code below are Oleg's
 
@@ -182,61 +180,6 @@ let sample_dist maxdepth (selector) (sample_runner) (ch:ProbabilitySpace<_>)  =
 
 //=============
 
-let sample_dist_par maxdepth (selector) (sample_runner) (ch:ProbabilitySpace<_>)  =
-    let look_ahead pcontrib (ans,acc) = function (* explore the branch a bit *)
-    | (p,Value v) -> (insertWith(+) v (p * pcontrib) ans, acc)
-    | (p,Continued (Lazy t)) -> 
-        match (t)  with
-        | [] -> (ans,(acc:(float * ListofContinuationTrees<_>) list))
-        | [(p1,Value v)] -> 
-           (insertWith (+) v (p * p1 * pcontrib) ans, acc)
-        | ch ->
-            let ptotal = List.fold (fun pa (p,_) -> pa + p) 0.0 ch 
-            (ans,
-              if ptotal < nearly_one then
-                (p * ptotal, List.map (fun (p,x) -> (p / ptotal,x)) ch)::acc 
-              else (p, ch)::acc)
-        
-    let rec loop depth pcontrib ans = function
-    | [(p,Value v)]  -> insertWith (+) v (p * pcontrib) ans
-    | []         -> ans
-    | [(p,Continued (Lazy th))] -> loop (depth+1) (p * pcontrib) ans (th)
-    | ch when depth < maxdepth -> (* choosing one thread randomly *)
-        let options = if depth = 0 then PSeq.fold (look_ahead pcontrib) (ans,[]) ch    
-                      else List.fold (look_ahead pcontrib) (ans,[]) ch
-        match options with
-        | (ans,[]) -> ans
-        | (ans,cch) ->
-           let (ptotal,th:ProbabilitySpace<_>) = selector cch 
-           loop (depth+1) (pcontrib * ptotal) ans th  
-     | _ -> ans
-    
-    let toploop pcontrib ans cch = (* cch are already pre-explored *)
-        let (ptotal,th) = selector cch 
-        loop 0 (pcontrib * ptotal) ans th 
-
-    let driver pcontrib vals cch =
-        let (ans,nsamples) = 
-             sample_runner Map.empty (fun ans -> toploop pcontrib ans cch)  
-
-        let ns = float nsamples  
-        let ans = Map.fold (fun ans v p  -> insertWith (+) v (ns * p) ans) ans vals 
-
-        printfn "sample_importance: done %d worlds\n" nsamples;
-        Map.fold (fun a v p -> (p / ns,Value v)::a) [] ans   
-    
-    let rec make_threads depth pcontrib ans ch =  (* pre-explore initial threads *)        
-        match List.fold (look_ahead pcontrib) (ans,[]) ch with
-        | (ans,[]) -> (* pre-exploration solved the problem *)
-          Map.fold (fun a v p -> (p,Value v)::a) [] ans
-        | (ans,[(p,ch)]) when depth < maxdepth -> (* only one choice, make more *)
-           make_threads (depth+1) (pcontrib * p) ans ch
-          (* List.rev is for literal compatibility with an earlier version *)
-        | (ans,cch) -> driver pcontrib ans (List.rev cch) 
-
-    make_threads 0 1.0 Map.empty ch : ProbabilitySpace<_> 
-////////////////////////
-
 ///////////////////
 (* A selector from a list of choices relying on the non-determinism
    supported by the parent reifier.
@@ -245,7 +188,7 @@ let dist_selector ch =
   let ptotal = List.fold (fun pa (p,_) -> pa + p) 0.0 ch in
   (ptotal, distribution (List.map (fun (p,v) -> (p / ptotal, v)) ch))
                                         
-let sample_importance0 d selector maxdpeth nsamples (thunk)  =
+let sample_importanceN d selector maxdpeth nsamples (thunk)  =
   let rec loop th z = function 0 -> (z,nsamples) | n -> loop th (th z) (n-1)
   sample_dist maxdpeth 
     selector 
@@ -253,19 +196,11 @@ let sample_importance0 d selector maxdpeth nsamples (thunk)  =
     (shallow_explore d (reify0 thunk))
 
 
-let sample_importance_par d selector maxdpeth nsamples (thunk)  =
-  let rec loop th z = function 0 -> (z,nsamples) | n -> loop th (th z) (n-1)
-  sample_dist_par maxdpeth 
-    selector 
-    (fun z th -> loop th z nsamples)
-    (shallow_explore d (reify0 thunk))
-
-
-let sample_importance selector maxdpeth nsamples (thunk) = sample_importance0 3 selector maxdpeth nsamples (thunk)                                  
+let sample_importance selector maxdpeth nsamples (thunk) = sample_importanceN 3 selector maxdpeth nsamples (thunk)                                  
           
 let inline sample_parallel depth n maxdepth (distr) samples =
     Array.Parallel.map (fun _ -> 
-          sample_importance0 depth random_selector maxdepth (samples/n) distr) [|1..n|]
+          sample_importanceN depth random_selector maxdepth (samples/n) distr) [|1..n|]
     |> List.concat 
     |> List.groupBy snd 
     |> List.map (fun (v,ps) -> List.averageBy fst ps, v) : ProbabilitySpace<_>

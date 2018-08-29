@@ -1,22 +1,13 @@
 module Hansei.Quantum
 
-open System
 open Hansei.Utils
 open Hansei.Continuation   
 open Hansei.Continuation.Quantum
 open System.Numerics
-open MathNet.Numerics
-open MathNet.Numerics.ComplexExtensions
 open MathNet.Numerics.LinearAlgebra
 
 //Core of Hansei modified from base:
 //https://gist.github.com/einblicker/3245547#file-hansei
-//Remaining and majority of code (till line 250) ported/lightly modified from
-//http://okmij.org/ftp/kakuritu/Hansei.html
-//Ocaml style comments in code below are Oleg's
-
-//This framework is much more flexible than the system described in Expert F#. 
-//A continuation monad is used to describe distributions as lazy continuation trees.
 //==========
 
 let complexf f = Complex(f,0.)

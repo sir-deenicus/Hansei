@@ -6,18 +6,6 @@ open System
 open Hansei.Continuation
 open Hansei.Utils
 
-//Core of Hansei modified from base:
-//https://gist.github.com/einblicker/3245547#file-hansei-fs-L65
-//Remaining and majority of code (till line 250) ported/lightly modified from
-//http://okmij.org/ftp/kakuritu/Hansei.html
-//Ocaml style comments in code below are Oleg's
-
-//This framework is much more flexible than the system described in Expert F#. 
-//A continuation monad is used to describe distributions as lazy continuation trees.
-//Modified to operate on log probabilities instead of raw probabilities due to underflow.
-
-//Better base for http://dippl.org 
-
 //===========
 let log_nearly_one = log(1.0 - 1e-7);
 
@@ -44,10 +32,8 @@ let logOnePlusX x =
     if abs x > 1e-4 then log(1.0 + x) // x is large enough that the obvious evaluation is OK       
     // Use Taylor approx. log(1 + x) = x - x^2/2 with error roughly x^3/3
     // Since |x| < 10^-4, |x|^3 < 10^-12, relative error less than 10^-8        
-    else (-0.5*x + 1.0)*x
-    
-                                            
-
+    else (-0.5*x + 1.0)*x   
+                                          
 //==========
 
 let distribution ch k = List.map (fun (p,v) -> (log p, Continued(lazy(k v)))) ch
