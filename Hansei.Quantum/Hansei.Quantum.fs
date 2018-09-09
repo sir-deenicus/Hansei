@@ -3,22 +3,23 @@ module Hansei.Quantum
 open Hansei.Utils
 open Hansei.Continuation   
 open Hansei.Continuation.Quantum
-open System.Numerics
-open MathNet.Numerics.LinearAlgebra
+open MathNet.Symbolics.LinearAlgebra
+open MathNet.Symbolics
+open MathNet.Symbolics.Extras
 
 //Core of Hansei modified from base:
 //https://gist.github.com/einblicker/3245547#file-hansei
 //==========
-
-let complexf f = Complex(f,0.)
+//It makes more sense I think, to use symbolic representations rather than complex numbers. This has more value as a 
+//pedagogical tool to get a firmer mental representation of quantum computing without going to a proper representation
 
 let qstate ch k = List.map (fun (p,v) -> (p, Continued(lazy(k v)))) ch
 
 let fail () = qstate []
 
-let inline qreify0 m = m (fun x -> [(Complex (1.,0.), Value x)])
+let inline qreify0 m = m (fun x -> [(Complex 1Q, Value x)])
 
-let qexactly x = qstate [Complex (1.,0.), x]
+let qexactly x = qstate [Complex 1Q, x]
 
 
 let explore (maxdepth : int option) (choices : QuantumProbabilitySpace<'T>) =
@@ -36,7 +37,7 @@ let explore (maxdepth : int option) (choices : QuantumProbabilitySpace<'T>) =
     | (down, (pt,c)::rest, (ans,susp)) ->
       loop p depth down rest (ans, (pt*p,c)::susp)
 
-  let (ans, susp) = loop (complexf 1.) 0 true choices (Map.empty, [])
+  let (ans, susp) = loop (Complex 1Q) 0 true choices (Map.empty, [])
   Map.fold (fun a v p -> (p, Value v)::a) susp ans : QuantumProbabilitySpace<'T>
 
 //===============
@@ -53,10 +54,10 @@ let inline qlimit_reify n model =  explore (Some n) (qreify0 model)
 
 //=-=-=-=-=-=-=-=-=-=
 let hadamard0 x = 
-    if List.sum x <> 1. then failwith "qubit must be either [1;0] or [0;1]"
-    else  vector x * (1./sqrt 2.) * matrix [[1.; 1.]; [1.;-1.]]
+    if List.sum x <> 1Q then failwith "qubit must be either [1;0] or [0;1]"
+    else  Vector x * (1Q/sqrt 2Q) * Matrix [[1Q; 1Q]; [1Q;-1Q]]
           |> Vector.toList
-          |> List.mapi (fun i c -> complexf c,i)  
+          |> List.mapi (fun i c -> Complex c,i)  
           |> qstate
     
 let bflip = function
@@ -67,8 +68,8 @@ let bflip = function
 let cnot c b = if c = 1 then bflip b else b
 
 let hadamard = function
-     | 0 -> hadamard0 [1.;0.] 
-     | 1 -> hadamard0 [0.;1.] 
+     | 0 -> hadamard0 [1Q;0Q] 
+     | 1 -> hadamard0 [0Q;1Q] 
      | _ -> failwith "Must be 0 or 1"
 
 let vqstate v = 
@@ -77,29 +78,29 @@ let vqstate v =
     |> qstate
 
 let phaseShift angle q = 
-    let x = if q = 0 then [complexf 1.;complexf 0.] else [complexf 0.;complexf 1.]            
+    let x = if q = 0 then [Complex 1Q;Complex 0Q] else [Complex 0Q;Complex 1Q]            
     
-    vqstate (matrix [[complexf 1.; complexf 0.]; 
-                     [complexf 0.; Complex(cos (angle), sin (angle))]] * vector x)
-    
+    vqstate (Matrix [[Complex 1Q; Complex 0Q]; 
+                     [Complex 0Q; Complex(cos (angle), sin (angle))]] * Vector x)
+      
 
 let rotateZ angle q = 
-    let x = if q = 0 then [complexf 1.;complexf 0.] else [complexf 0.;complexf 1.]            
+    let x = if q = 0 then [Complex 1Q;Complex 0Q] else [Complex 0Q;Complex 1Q]            
     
-    vqstate(matrix [[Complex(cos (-angle), sin (-angle)); complexf 0.]; 
-                    [complexf 0.; Complex(cos (angle), sin (angle))]] * vector x)
+    vqstate(Matrix [[Complex(cos (-angle), sin (-angle)); Complex 0Q]; 
+                    [Complex 0Q; Complex(cos (angle), sin (angle))]] * Vector x)
     
 let rotateX angle q = 
-    let x = if q = 0 then [complexf 1.;complexf 0.] else [complexf 0.;complexf 1.]            
+    let x = if q = 0 then [Complex 1Q;Complex 0Q] else [Complex 0Q;Complex 1Q]            
     
-    vqstate (matrix [[complexf (cos (angle)); Complex(0., -sin (angle))]; 
-                     [Complex(0., -sin (angle)); complexf (cos (angle))]] * vector x)
+    vqstate (Matrix [[Complex (cos (angle)); Complex(0Q, -sin (angle))]; 
+                 [Complex(0Q, -sin (angle)); Complex (cos (angle))]] * Vector x)
  
 let rotateY angle q = 
-    let x = if q = 0 then [complexf 1.;complexf 0.] else [complexf 0.;complexf 1.]            
+    let x = if q = 0 then [Complex 1Q;Complex 0Q] else [Complex 0Q;Complex 1Q]            
     
-    vqstate (vector x * matrix [[complexf (cos (angle)); complexf(-sin (angle))]; 
-                                [complexf(sin (angle)); complexf (cos (angle))]])
+    vqstate (Vector x * Matrix [[Complex (cos (angle)); Complex(-sin (angle))]; 
+                                [Complex(sin (angle)); Complex (cos (angle))]])
  
 
 let bell qb1 qb2 =

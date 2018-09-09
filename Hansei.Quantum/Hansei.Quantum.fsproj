@@ -11,8 +11,10 @@
   </ItemGroup>
 
   <ItemGroup>
+    <PackageReference Include="FParsec" Version="1.0.3" />
     <PackageReference Include="MathNet.Numerics" Version="4.5.1" />
     <PackageReference Include="MathNet.Numerics.FSharp" Version="4.5.1" />
+    <PackageReference Include="MathNet.Symbolics" Version="0.18.1" />
   </ItemGroup>
 
   <ItemGroup>
@@ -22,6 +24,9 @@
   <ItemGroup>
     <Reference Include="Prelude">
       <HintPath>..\..\Prelude\Prelude\bin\Release\net45\Prelude.dll</HintPath>
+    </Reference>
+    <Reference Include="Simple-Symbolics">
+      <HintPath>..\..\Simple-Symbolics\Simple-Symbolics\bin\Debug\netcoreapp2.1\Simple-Symbolics.dll</HintPath>
     </Reference>
   </ItemGroup>
 

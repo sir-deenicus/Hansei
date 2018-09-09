@@ -3,37 +3,37 @@
 open Prelude.Common
 open Prelude.Math
 open Hansei.TextUtils
-open Hansei.Continuation.Quantum
-open System.Numerics
-open MathNet.Numerics        
-open Hansei.Quantum              
+open Hansei.Continuation.Quantum     
+open Hansei.Quantum        
+open MathNet.Symbolics
+open MathNet.Symbolics.Extras  
 
-module Map  =
-  let sum m = Map.fold (fun sum _ x -> sum + x) (Complex (0.,0.)) m
+module Map =
+  let sum m = Map.fold (fun sum _ x -> sum + x) (Complex 0Q) m
   let sumf m = Map.fold (fun sum _ x -> sum + x) (0.) m
-  let squaredSum m = Map.fold (fun sum _ (x:Complex) -> sum + x.Magnitude ** 2.) 0. m |> complexf
+  let squaredSum m = Map.fold (fun sum _ (x:Complex) -> sum + x.Magnitude ** 2) 0Q m  
   let normalize (m : Map<'a,_>) = 
       let total = sqrt (squaredSum m)
       Map.map (fun _ v -> v / total) m
 
 let inline measure0 (choices:list<Complex * 'a>) =  
-  List.map (fun (p, v) -> ((Complex.magnitude p) ** 2., v)) choices
+  List.map (fun (p, v) -> ((Complex.magnitude p) ** 2, v)) choices
 
 let inline measure (choices) =  
-  List.map (fun (p, v) -> ((Complex.magnitude p) ** 2., valueExtract v)) (qexact_reify choices)
+  List.map (fun (p, v) -> ((Complex.magnitude p) ** 2, valueExtract v)) (qexact_reify choices)
 
 let inline measure2 (choices:list<Complex * 'a>) =  
-  List.map (fun (p, v) -> ((Complex.magnitude p) ** 2., valueExtract v)) (choices)
+  List.map (fun (p, v) -> ((Complex.magnitude p) ** 2, valueExtract v)) (choices)
 ////////////////////////////
 
 let qhistogram len (sq) =
     let d = Seq.toArray sq
-    let maxp,_ = Array.maxBy (fst) d
+    let maxp,_ = Array.maxBy (fst >> Expression.toFloat) d
 
     Array.map (fun (p,x)-> 
           [|sprintf "%A" x ;
             string p; 
-            String.replicate (int(round 0 (p/maxp * len))) "#" |]) d
+            String.replicate (int(round 0 (Expression.toFloat (p/maxp) * len))) "#" |]) d
     |> makeTable "\n" [|"item";"p"; ""|] ""  
 
 let qhistogram1 m len d =
@@ -50,7 +50,7 @@ let inline normalizef (choices:list<float * 'a>) =
   List.map (fun (p, v) -> (p/sum, v)) choices
 
 let inline qnormalize (choices:list<Complex * 'a>) =
-  let sum = List.sumBy (fst >> Complex.magnitude>>squared) choices |> sqrt |> complexf
+  let sum = List.sumBy (fst >> Complex.magnitude>>squared) choices |> sqrt 
   List.map (fun (p, v) -> (p/sum, v)) choices
 
 //////////
@@ -61,9 +61,9 @@ let inline mkProbabilityMap t =
            | Value x -> yield (x,p)
            | _ -> ()]      
 
-let amplitudeFor2 m item = 
+let amplitude m item = 
     match Map.tryFind item m with
-     | None -> (complexf 0.)
+     | None -> (Complex 0Q)
      | Some p -> p
 
 let inline amplitudeFor filter m = 

@@ -1,6 +1,6 @@
 ﻿module Hansei.Continuation.Quantum
 
-open System.Numerics
+open MathNet.Symbolics.Extras
 
 type ListofContinuationTrees<'T> = list<Complex * ValueContinuation<'T>>
 and ValueContinuation<'T> = 
