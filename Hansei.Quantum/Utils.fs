@@ -30,9 +30,9 @@ let qhistogram len (sq) =
     let d = Seq.toArray sq
     let maxp,_ = Array.maxBy (fst >> Expression.toFloat) d
 
-    Array.map (fun (p,x)-> 
+    Array.map (fun (p:Expression,x)-> 
           [|sprintf "%A" x ;
-            string p; 
+            p.ToFormattedString() ; 
             String.replicate (int(round 0 (Expression.toFloat (p/maxp) * len))) "#" |]) d
     |> makeTable "\n" [|"item";"p"; ""|] ""  
 
