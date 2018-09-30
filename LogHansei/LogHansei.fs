@@ -206,13 +206,13 @@ let inline limit_reify n model =  explore (Some n) (reify0 model)
 
 //=-=-=-=-=-=-=-=-=-=
 module Distributions = 
-  let bernoulli p = distribution [(p, true); (1.0-p, false)]
+  let bernoulli p = distribution [(log p, true); (log (1.0-p), false)]
 
-  let bernoulliC p (a,b) = distribution [(p, a); (1.0-p, b)]
+  let bernoulliC p (a,b) = distribution [(log p, a); (log (1.0-p), b)]
                                                           
   let uniform (items:'a list) = 
       let num = float items.Length
-      distribution (List.map (fun item -> 1./num, item) items)
+      distribution (List.map (fun item -> log (1./num), item) items)
 
   let categorical distr = distribution distr 
 
@@ -287,16 +287,16 @@ module Distributions =
 
   ///polya's urn
   let rec beta roundto draws a b = cont {
-      if draws <= 0 then return (round roundto (a/(a+b)))
-      else let! ball = categorical [a/(a+b),1;b/(a+b),2]
+      if draws <= 0 then return (round roundto (log(a/(a+b))))
+      else let! ball = categorical [log (a/(a+b)),1;log(b/(a+b)),2]
            if ball = 1 then return! beta roundto (draws - 1) (a+1.) b
            else return! beta roundto (draws-1) a (b+1.)
   }
 
 
   let rec dirichlet3 roundto draws a b c = cont {
-      if draws <= 0 then return (Array.map (round roundto) [|a/(a+b+c);b/(a+b+c);c/(a+b+c)|])
-      else let! ball = categorical [a/(a+b+c),1;b/(a+b+c),2;c/(a+b+c),3]
+      if draws <= 0 then return (Array.map (log >> round roundto) [|a/(a+b+c);b/(a+b+c);c/(a+b+c)|])
+      else let! ball = categorical [log(a/(a+b+c)) ,1;log(b/(a+b+c)),2;log(c/(a+b+c)),3]
            if ball = 1 then return! dirichlet3 roundto (draws - 1) (a+1.) b c
            elif ball = 2 then return! dirichlet3 roundto (draws - 1) a (b+1.) c
            else return! dirichlet3 roundto (draws-1) a b (c+1.)
@@ -305,9 +305,9 @@ module Distributions =
   let rec dirichlet roundto draws d = cont {
       let z = List.sum d
       if draws <= 0 then 
-         return (List.map (fun a -> round roundto (a/z)) d)
+         return (List.map (fun a -> round roundto (log (a/z))) d)
       else          
-           let ps = List.mapi (fun i a -> (a/z), i) d
+           let ps = List.mapi (fun i a -> log (a/z), i) d
            let! ball = categorical ps
            let d' = List.mapi (fun i a -> if i = ball then a + 1. else a) d
            return! dirichlet roundto (draws - 1) d'         
@@ -319,4 +319,8 @@ module Distributions =
       else let! fresh = pd
            return! drawrandom (fresh::draws) (n-1) pd
   }     
+
+  let discretizedSampler f sampler (n:int) = cont {
+      return! categorical (sampler n |> coarsenWith f |> List.map (keepRight log))   
+  }
 

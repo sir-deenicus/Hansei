@@ -21,7 +21,6 @@ let inline qreify0 m = m (fun x -> [(Complex 1Q, Value x)])
 
 let qexactly x = qstate [Complex 1Q, x]
 
-
 let explore (maxdepth : int option) (choices : QuantumProbabilitySpace<'T>) =
   let rec loop (p:Complex) depth down susp answers =
     match (down, susp, answers) with

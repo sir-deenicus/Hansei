@@ -88,7 +88,11 @@ let inline normalize (choices) =
   let sum = List.sumBy fst choices
   List.map (fun (p, v) -> (p/sum, v)) choices
 
-
+let coarsenWith f samples =  
+       Array.groupBy f samples
+    |> Array.map (fun (x,xs) -> float xs.Length, x) 
+    |> List.ofArray
+    |> normalize
 //////////
 
 let inline mkProbabilityMap t =

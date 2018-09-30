@@ -1,4 +1,4 @@
-﻿module Hansei.Utils.Rational
+﻿module Hansei.Rational.Utils
 
 open Hansei.TextUtils
 open System
@@ -6,6 +6,25 @@ open Hansei.Continuation
 open MathNet.Numerics
 open Prelude.Common
 open Prelude.Math
+open Hansei.Utils
+
+module BigRational =     
+  ///limited by range of decimal (which is used as a less noisy alternative to floats)
+  let fromFloat (f:float) =
+      let df = decimal f
+      if df = floor df then BigRational.FromBigInt (Numerics.BigInteger df)
+      else
+        let s = string (df - floor df)
+        let pow10 = Numerics.BigInteger 10 ** (s.Length - 2)
+        BigRational.FromBigIntFraction(Numerics.BigInteger(df * decimal pow10), pow10)
+  let fromFloatRepeating (f:float) =
+      let df = decimal f
+      let len = float((string (df - floor df)).Length - 2)
+      let pow10 = decimal (10. ** len)
+      if abs f < 1. then
+        BigRational.FromIntFraction(int (df * pow10), int (floor (pow10 - df)))
+      else BigRational.FromIntFraction(int (df * pow10 - floor df), int (pow10 - 1M))
+ 
 
 ////////////////////////////
 let histogram len (d:_[]) =

@@ -1,4 +1,4 @@
-module Hansei.Core
+module Hansei.Rational
 
 open Hansei.Continuation
 open Hansei.Continuation.Rational
@@ -9,7 +9,7 @@ open Prelude.Math
  
 //==========
 
-let distribution ch k = List.map (fun (p,v) -> (p, Continued(lazy(k v)))) ch
+let distribution ch k = List.map (fun (p:BigRational,v) -> (p, Continued(lazy(k v)))) ch
 
 let fail () = distribution []
 
@@ -162,7 +162,7 @@ let sample_dist maxdepth (selector) (sample_runner) ch  =
    supported by the parent reifier.
 *)
 let dist_selector ch =
-  let ptotal = List.fold (fun pa (p,_) -> pa + p) 0.0 ch in
+  let ptotal = List.fold (fun pa (p,_) -> pa + p) 0N ch in
   (ptotal, distribution (List.map (fun (p,v) -> (p / ptotal, v)) ch))
                                         
 let sample_importance selector maxdpeth nsamples (thunk)  =
@@ -181,6 +181,7 @@ let inline limit_reify n model =  explore (Some n) (reify0 model)
 
 //=-=-=-=-=-=-=-=-=-=
 module Distributions =                
+  open Hansei.Rational.Utils
 
   let bernoulli p = distribution [(p, true); (1N-p, false)]
 
@@ -289,9 +290,12 @@ module Distributions =
            return! dirichlet (draws - 1) d'         
   }
 
-
   let rec drawrandom draws n pd = cont {
       if n = 0 then return draws
       else let! fresh = pd
            return! drawrandom (fresh::draws) (n-1) pd
-  }     
+  }
+  
+  let discretizedSampler f sampler (n:int) = cont {
+      return! categorical (sampler n |> coarsenWith f |> List.map (keepRight BigRational.fromFloat))
+  }

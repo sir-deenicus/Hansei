@@ -327,5 +327,9 @@ module Distributions =
       if n = 0 then return draws
       else let! fresh = pd
            return! drawrandom (fresh::draws) (n-1) pd
-  }     
+  }    
+  
+  let discretizedSampler f sampler (n:int) = cont {
+      return! categorical (sampler n |> coarsenWith f)   
+  }
 
