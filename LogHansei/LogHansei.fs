@@ -320,7 +320,8 @@ module Distributions =
            return! drawrandom (fresh::draws) (n-1) pd
   }     
 
-  let discretizedSampler f sampler (n:int) = cont {
-      return! categorical (sampler n |> coarsenWith f |> List.map (keepRight log))   
+  let discretizedSampler coarsener sampler (n:int) = cont {
+      return! categorical ([|for _ in 1..n -> sampler ()|] |> (coarsenWith coarsener >> List.map (keepRight log)))
   }
+   
 
