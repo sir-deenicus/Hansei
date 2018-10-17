@@ -27,6 +27,8 @@ let fail () = distribution []
 
 let observe test = cont { if not test then return! fail() }
 
+let constrain test = cont { if not test then return! fail() }
+
 let filterDistribution f p = cont {
     let! x = p
     do! observe (f x)
@@ -128,7 +130,8 @@ let rejection_sample_dist selector nsamples ch =
     driver (reify0 ch) Map.empty nsamples  : 'a ProbabilitySpace
 
                           
-let sample_dist maxdepth (selector) (sample_runner) (ch:ProbabilitySpace<_>)  =
+let sample_dist (maxtime:_ option) maxdepth (selector) (sample_runner) (ch:ProbabilitySpace<_>)  =
+    let start = System.DateTime.Now
     let look_ahead pcontrib (ans,acc) = function (* explore the branch a bit *)
     | (p,Value v) -> (insertWith(+) v (p * pcontrib) ans, acc)
     | (p,Continued (Lazy t)) -> 
@@ -141,35 +144,28 @@ let sample_dist maxdepth (selector) (sample_runner) (ch:ProbabilitySpace<_>)  =
             (ans,
               if ptotal < nearly_one then
                 (p * ptotal, List.map (fun (p,x) -> (p / ptotal,x)) ch)::acc 
-              else (p, ch)::acc)
-        
+              else (p, ch)::acc)        
     let rec loop depth pcontrib ans = function
     | [(p,Value v)]  -> insertWith (+) v (p * pcontrib) ans
     | []         -> ans
     | [(p,Continued (Lazy th))] -> loop (depth+1) (p * pcontrib) ans (th)
-    | ch when depth < maxdepth -> (* choosing one thread randomly *)
-    
+    | ch when depth < maxdepth && (maxtime.IsNone || (System.DateTime.Now - start).TotalSeconds < maxtime.Value) -> (* choosing one thread randomly *)    
         match List.fold (look_ahead pcontrib) (ans,[]) ch with
         | (ans,[]) -> ans
         | (ans,cch) ->
            let (ptotal,th:ProbabilitySpace<_>) = selector cch 
            loop (depth+1) (pcontrib * ptotal) ans th  
-    | _ -> ans
-    
+    | _ -> ans    
     let toploop pcontrib ans cch = (* cch are already pre-explored *)
         let (ptotal,th) = selector cch 
         loop 0 (pcontrib * ptotal) ans th 
-
     let driver pcontrib vals cch =
         let (ans,nsamples) = 
              sample_runner Map.empty (fun ans -> toploop pcontrib ans cch)  
-
         let ns = float nsamples  
         let ans = Map.fold (fun ans v p  -> insertWith (+) v (ns * p) ans) ans vals 
-
         printfn "sample_importance: done %d worlds\n" nsamples;
-        Map.fold (fun a v p -> (p / ns,Value v)::a) [] ans   
-    
+        Map.fold (fun a v p -> (p / ns,Value v)::a) [] ans       
     let rec make_threads depth pcontrib ans ch =  (* pre-explore initial threads *)
         match List.fold (look_ahead pcontrib) (ans,[]) ch with
         | (ans,[]) -> (* pre-exploration solved the problem *)
@@ -178,96 +174,62 @@ let sample_dist maxdepth (selector) (sample_runner) (ch:ProbabilitySpace<_>)  =
            make_threads (depth+1) (pcontrib * p) ans ch
           (* List.rev is for literal compatibility with an earlier version *)
         | (ans,cch) -> driver pcontrib ans (List.rev cch) 
-
     make_threads 0 1.0 Map.empty ch : ProbabilitySpace<_> 
 
-type Agent<'a> = MailboxProcessor<'a>
-
-type ParMsg = Stop | Update of int * float | DepthInfo of int * AsyncReplyChannel<float list>
- 
-//the principle here is influenced by metropolis hastings and simulated annealing. If we think of this as a search space and problem, then it's clear that we 
-//need to focus our attention on the most promising branches or paths. This is done by tracking the encountered probabilities as one wanders deeper into each branch.
-//The probabilities are communicated to a collecting agent. In look ahead, a parallel search is done, offering the possibility of communicating promising paths just in time.
-//When it comes time for selection, paths are excluded according to their probability vs depth summary and a temperature parameter that decreases at each depth.
-//In addition to considering a branch by its depth probability, one can imagine an estimate procedure that estimates which branches might not be worth persuing
-let sample_dist_parallel (maxtime:float option) updatebranchprobs operator temperature attenuateBy maxdepth (selector) (sample_runner) (ch:ProbabilitySpace<_>)  =
-  let start = System.DateTime.Now
-  let agent = 
-      Agent.Start ( fun inbox ->
-        let rec loop state =
-            async { match! inbox.Receive() with 
-                    | Stop -> ()
-                    | Update (d, p) -> return! loop (mapAddGeneric state d (fun ps -> p::ps) [p])
-                    | DepthInfo (d, chann) -> 
-                        chann.Reply(mapGet state d [])
-                        return! loop state }  
-        loop Map.empty)
-  let filter T depth cch =
-      match agent.PostAndReply(fun r -> DepthInfo (depth, r)) with
-      | [] | [_] | [_;_]->  cch
-      | popts -> 
-         let popt = operator popts
-         List.filter (fun (p, _) -> 
-          let accept = if p > popt then 1. else exp((p - popt) / T) 
-          random.NextDouble() < accept) cch
-  let look_ahead depth pcontrib (ans,acc) = function (* explore the branch a bit *)
-  | (p,Value v) -> 
-       agent.Post(Update (depth, p * pcontrib))
+//=============
+//
+let sample_dist_explore (maxtime:float option) attenuateBy maxdepth (selector) (sample_runner) (ch:ProbabilitySpace<_>)  =
+  let start = System.DateTime.Now 
+  let look_ahead pcontrib (ans,acc) = function (* explore the branch a bit *)
+  | (p,Value v) ->  
        insertWith (+) v (p * pcontrib) ans, acc
   | (p,Continued (Lazy t)) -> 
       match (t)  with
       | [] -> (ans,(acc:(float * ListofContinuationTrees<_>) list))
-      | [(p1,Value v)] -> 
-          agent.Post(Update (depth, p * p1 * pcontrib))
+      | [(p1,Value v)] ->  
           (insertWith (+) v (p * p1 * pcontrib) ans, acc)
       | ch ->
           let ptotal = List.fold (fun pa (p,_) -> pa + p) 0.0 ch 
           (ans,
-            if ptotal < nearly_one then
-              if updatebranchprobs then agent.Post(Update (depth, p * ptotal * pcontrib))
+            if ptotal < nearly_one then 
               (p * ptotal, List.map (fun (p,x) -> (p / ptotal,x)) ch)::acc 
-            else 
-              if updatebranchprobs then agent.Post(Update (depth, p * pcontrib))
-              (p, ch)::acc)        
+            else (p, ch)::acc)        
   let rec loop T depth pcontrib ans = function
-  | [(p,Value v)]  -> 
-       agent.Post(Update (depth, p * pcontrib))
+  | [(p,Value v)]  ->  
        insertWith (+) v (p * pcontrib) ans
   | []         -> ans
-  | [(p,Continued (Lazy th))] -> 
-     if updatebranchprobs then agent.Post(Update (depth, p * pcontrib))
+  | [(p,Continued (Lazy th))] ->  
      loop (max 0.01 (T * attenuateBy)) (depth+1) (p * pcontrib) ans (th)
-  | ch when depth < maxdepth && maxtime.IsSome && (System.DateTime.Now - start).TotalSeconds < maxtime.Value -> (* choosing one thread randomly *)
-      let choices = PSeq.fold (look_ahead depth pcontrib) (ans,[]) (filter (T * 2.) depth ch) 
+  | ch when depth < maxdepth && (maxtime.IsNone || (System.DateTime.Now - start).TotalSeconds < maxtime.Value) -> (* choosing one thread randomly *)
+      let choices = List.fold (look_ahead pcontrib) (ans,[]) ch
       match choices with
       | (ans,[]) -> ans
       | (ans,cch) -> 
-          let (ptotal,th:ProbabilitySpace<_>) = selector (filter T depth cch) 
+          let scch = List.sortBy fst cch |> List.toArray
+          let scch' = Array.splitInto 2 scch
+          let accepted = if scch'.Length = 1 then scch else if random.NextDouble() < (0.5 * T) then scch'.[0] else scch'.[1]  
+          let (ptotal,th:ProbabilitySpace<_>) = selector (List.ofArray accepted) 
           loop (max 0.01 (T * attenuateBy)) (depth+1) (pcontrib * ptotal) ans th  
   | _ -> ans    
   let toploop pcontrib ans cch = (* cch are already pre-explored *)
       let (ptotal,th) = selector cch 
-      loop temperature 0 (pcontrib * ptotal) ans th 
+      loop 1. 0 (pcontrib * ptotal) ans th 
   let driver pcontrib vals cch =
       let (ans,nsamples) = 
             sample_runner Map.empty (fun ans -> toploop pcontrib ans cch)  
       let ns = float nsamples  
       let ans = Map.fold (fun ans v p  -> insertWith (+) v (ns * p) ans) ans vals 
-      printfn "sample_importance: done %d worlds\n" nsamples;
-      agent.Post Stop
+      printfn "sample_importance: done %d worlds\n" nsamples; 
       Map.fold (fun a v p -> (p / ns,Value v)::a) [] ans       
   let rec make_threads depth pcontrib ans ch =  (* pre-explore initial threads *)
-      match List.fold (look_ahead depth pcontrib) (ans,[]) ch with
+      match List.fold (look_ahead pcontrib) (ans,[]) ch with
       | (ans,[]) -> (* pre-exploration solved the problem *)
         Map.fold (fun a v p -> (p,Value v)::a) [] ans
       | (ans,[(p,ch)]) when depth < maxdepth -> (* only one choice, make more *)
           make_threads (depth+1) (pcontrib * p) ans ch
         (* List.rev is for literal compatibility with an earlier version *)
       | (ans,cch) -> driver pcontrib ans (List.rev cch) 
-
   make_threads 0 1.0 Map.empty ch : ProbabilitySpace<_> 
-//=============
-
 ///////////////////
 (* A selector from a list of choices relying on the non-determinism
    supported by the parent reifier.
@@ -275,29 +237,26 @@ let sample_dist_parallel (maxtime:float option) updatebranchprobs operator tempe
 let dist_selector ch =
   let ptotal = List.fold (fun pa (p,_) -> pa + p) 0.0 ch in
   (ptotal, distribution (List.map (fun (p,v) -> (p / ptotal, v)) ch))
-                                        
-let sample_importanceN selector d maxdpeth nsamples (thunk)  =
+
+let sample_importanceExplore maxtime selector d attenuateBy maxdpeth nsamples (thunk) =
   let rec loop th z = function 0 -> (z,nsamples) | n -> loop th (th z) (n-1)
-  sample_dist maxdpeth 
+  sample_dist_explore maxtime attenuateBy maxdpeth 
+    selector 
+    (fun z th -> loop th z nsamples)
+    (shallow_explore d (reify0 thunk)) 
+    
+let sample_importanceN selector maxtime d maxdpeth nsamples (thunk)  =
+  let rec loop th z = function 0 -> (z,nsamples) | n -> loop th (th z) (n-1)
+  sample_dist maxtime maxdpeth 
     selector 
     (fun z th -> loop th z nsamples)
     (shallow_explore d (reify0 thunk))
 
-let sample_importance maxdpeth nsamples (thunk) = sample_importanceN random_selector 3 maxdpeth nsamples (thunk)                                  
-     
-let sample_importanceParallelGen maxtime updateBranchProbs selector d operator temperature attenuateBy maxdpeth nsamples (thunk) =
-  let rec loop th z = function 0 -> (z,nsamples) | n -> loop th (th z) (n-1)
-  sample_dist_parallel maxtime updateBranchProbs operator temperature attenuateBy maxdpeth 
-    selector 
-    (fun z th -> loop th z nsamples)
-    (shallow_explore d (reify0 thunk))
+let sample_importance maxdpeth nsamples (thunk) = sample_importanceN random_selector None 3 maxdpeth nsamples (thunk)                                  
 
-let sample_importanceParallel maxtime updateBranchProbs shallowmaxdepth operator temperature attenuateBy maxdpeth nsamples (thunk) = 
-    sample_importanceParallelGen maxtime updateBranchProbs random_selector shallowmaxdepth operator temperature attenuateBy maxdpeth nsamples (thunk) 
-     
-let inline sample_parallel shallowmaxdepth n maxdepth nsamples (distr) =
+let inline sample_parallel shallowmaxdepth n maxdepth maxtime nsamples (distr) =
     Array.Parallel.map (fun _ -> 
-          sample_importanceN random_selector shallowmaxdepth maxdepth (nsamples/n) distr) [|1..n|]
+          sample_importanceN random_selector maxtime shallowmaxdepth maxdepth (nsamples/n) distr) [|1..n|]
     |> List.concat 
     |> List.groupBy snd 
     |> List.map (fun (v,ps) -> List.averageBy fst ps, v) : ProbabilitySpace<_>
@@ -306,14 +265,20 @@ let inline sample_parallel shallowmaxdepth n maxdepth nsamples (distr) =
 let inline exact_reify model   =  explore  None     (reify0 model)  
 let inline limit_reify n model =  explore (Some n) (reify0 model)  
 
-type Model<'a,'b when 'b : comparison>(thunk:(('a -> ProbabilitySpace<'a>) -> ProbabilitySpace<'b>)) =  
-     member __.ImportanceSample(nsamples, maxdepth, ?shallowExploreDepth) = sample_importanceN random_selector (defaultArg shallowExploreDepth 3) maxdepth nsamples (thunk)
-     member __.ImportanceSampleParallel(nsamples,nparallel, maxdepth, ?shallowExploreDepth) = sample_parallel (defaultArg shallowExploreDepth 3) nparallel maxdepth nsamples (thunk)
+let printWith f x =  
+    List.map (function (p, Value x) -> p, f x | (p, Continued _) -> p, "...") x
+
+type Model<'a,'b when 'b : comparison>(thunk:(('a -> ProbabilitySpace<'a>) -> ProbabilitySpace<'b>)) =   
+     member __.model = thunk
+     member __.ImportanceSample(nsamples, maxdepth, ?maxtime, ?shallowExploreDepth, ?selector) = sample_importanceN (defaultArg selector random_selector) maxtime (defaultArg shallowExploreDepth 3) maxdepth nsamples (thunk)
+     member __.ImportanceSampleParallel(nsamples,nparallel, maxdepth, ?maxtime, ?shallowExploreDepth) = sample_parallel (defaultArg shallowExploreDepth 3) nparallel maxdepth maxtime nsamples (thunk)
      member __.Reify (?limit) = match limit with None -> exact_reify thunk | Some n -> limit_reify n thunk
      member __.RejectionSample nsamples = rejection_sample_dist random_selector nsamples thunk 
-     member __.PrunedImportanceSampleParallel(temperature,attenuateBy,maxdpeth,nsamples,?shallowExploreDepth,?maxtime,?updateBranchProbs,?operator) = 
-      sample_importanceParallelGen (defaultArg maxtime None) (defaultArg updateBranchProbs true) random_selector (defaultArg shallowExploreDepth 3) (defaultArg operator List.max) temperature attenuateBy maxdpeth nsamples (thunk) 
- 
+     ///This method splits the options into two halves, one of low probability and another of high. It picks randomly between the two but an attenuate parameter of < 1. will
+     ///more and more heavily favor the top half as one explores deeper into the tree.
+     member __.ImportanceSampleExplore(nsamples,maxdpeth,attenuateBy,?shallowExploreDepth,?maxtime) = 
+               sample_importanceExplore maxtime random_selector (defaultArg shallowExploreDepth 3) attenuateBy maxdpeth nsamples (thunk)  
+   
 
 //=-=-=-=-=-=-=-=-=-=
 module Distributions =                

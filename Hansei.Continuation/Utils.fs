@@ -72,8 +72,7 @@ let insertWith fn key item m =
     let v' = Map.tryPick (fun k' v' -> if key = k' then Some v' else None) m
     match v' with
     | Some v' -> Map.add key (fn item v') m
-    | None -> Map.add key item m
-
+    | None -> Map.add key item m 
 
 let insertWith0 fn key item m =    
     match Map.tryFind key m with
