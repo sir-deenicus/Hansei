@@ -3,9 +3,8 @@ module Hansei.Core
 open Hansei.Continuation
 open Hansei.Utils
 open Prelude.Common
-open Prelude.Math
-open Prelude.Parallel
-open Hansei
+open Prelude.Math 
+open System
 
 //open FSharp.Collections.ParallelSeq
 
@@ -277,8 +276,7 @@ type Model<'a,'b when 'b : comparison>(thunk:(('a -> ProbabilitySpace<'a>) -> Pr
      ///This method splits the options into two halves, one of low probability and another of high. It picks randomly between the two but an attenuate parameter of < 1. will
      ///more and more heavily favor the top half as one explores deeper into the tree.
      member __.ImportanceSampleExplore(nsamples,maxdpeth,attenuateBy,?shallowExploreDepth,?maxtime) = 
-               sample_importanceExplore maxtime random_selector (defaultArg shallowExploreDepth 3) attenuateBy maxdpeth nsamples (thunk)  
-   
+               sample_importanceExplore maxtime random_selector (defaultArg shallowExploreDepth 3) attenuateBy maxdpeth nsamples (thunk)     
 
 //=-=-=-=-=-=-=-=-=-=
 module Distributions =                

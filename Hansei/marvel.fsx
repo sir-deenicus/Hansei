@@ -155,11 +155,11 @@ resultsall2 |> List.sortByDescending fst |> printWith prettyPrint |> Utils.histo
 
 let results2 = m2.ImportanceSample(5000,250) 
 
-m2.ImportanceSampleExplore(5000,250,0.5) |> List.sortBy fst |> Utils.normalize |> printWith prettyPrint |> Utils.histogram2 20.
-
 results2 |> List.sortBy fst |> Utils.normalize |> printWith prettyPrint |> Utils.histogram2 20.
 
-List.map (fun (p,Value x) -> prettyPrint x, test2 x) results2 |> List.sortByDescending (snd >> fst >> uncurry2 (/)) //|> List.filter (snd >> snd >> fun l -> Seq.length l = 1 && Seq.contains "Black Panther" l)//
+m2.ImportanceSampleExplore(5000,250,0.5) |> List.sortBy fst |> Utils.normalize |> printWith prettyPrint |> Utils.histogram2 20.
+
+List.map (fun (p,Value x) -> prettyPrint x, test2 x) results2 |> List.sortByDescending (snd >> fst >> uncurry2 (/)) |> List.filter (snd >> snd >> fun l -> Seq.length l = 1 && Seq.contains "Black Panther" l)//
 List.map (fun (p,Value x) -> test x |> round 1) results2 |> Seq.counts |> keyValueSeqtoPairArray //
 Model(cont { let! a = uniform ["cat";"dog"] 
              let r = if a = "cat" then 0.9 else 0.2
