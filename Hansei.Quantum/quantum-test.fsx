@@ -1,13 +1,8 @@
-﻿#I @"C:\Users\Admin\Documents\Visual Studio 2017\Libs\MathNet"
-
-#r @"bin\Release\netcoreapp2.1\Hansei.Core.dll"
-#r @"..\fparsec\net40-client\fparsecCs.dll"
-#r @"..\fparsec\net40-client\fparsec.dll"
-#r @".\lib\netstandard2.0\MathNet.Numerics.dll"
-#r @".\lib\netstandard2.0\MathNet.Numerics.FSharp.dll"
-#r @".\symbolics\net40\mathnet.symbolics.dll"
-#r @"bin\Release\netcoreapp2.1\Simple-Symbolics.dll"
-#r @"bin\Release\netcoreapp2.1\Hansei.Quantum.dll"
+﻿#r @"bin\Release\net45\Prelude.dll"
+#r @"bin\Release\netcoreapp2.0\Hansei.Core.dll"
+#r @"bin\Release\net45\mathnet.symbolics.dll"
+#r @"bin\Release\net45\Simple-Symbolics.dll"
+#r @"bin\Release\netcoreapp2.0\Hansei.SymbolicQuantum.dll"
 
 open Hansei.Continuation
 open Hansei.Quantum
@@ -24,3 +19,5 @@ cont {
   let! b = hadamard c
   return (c)} 
   |> qhistogram2 20.
+
+   

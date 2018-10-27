@@ -8,19 +8,13 @@ and ValueContinuation<'T> =
     | Continued of Lazy<ProbabilitySpace<'T>>    
 and ProbabilitySpace<'T> = ContinuationTree<'T>
 
-let valueExtract = function Value x -> x
-
-let valueExtract2 = function Value x -> Some x | _ -> None
-
-
 let reflect tree k =  
     let rec make_choices pv = 
         List.map (function 
           | (p, Value x) -> (p, Continued(lazy(k x)))
           | (p, Continued(Lazy x)) -> (p, Continued(lazy(make_choices x)))) pv
         
-    make_choices tree
-
+    make_choices tree 
 
 (* Variable elimination optimization: transform a stochastic function
    a -> b to a generally faster function

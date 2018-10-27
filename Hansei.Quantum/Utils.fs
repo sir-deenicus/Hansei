@@ -3,6 +3,7 @@
 open Prelude.Common
 open Prelude.Math
 open Hansei.TextUtils
+open Hansei.Continuation
 open Hansei.Continuation.Quantum     
 open Hansei.Quantum        
 open MathNet.Symbolics

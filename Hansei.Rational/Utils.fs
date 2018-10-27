@@ -1,4 +1,4 @@
-﻿module Hansei.Rational.Utils
+﻿module Hansei.Utils.Rational
 
 open Hansei.TextUtils
 open System

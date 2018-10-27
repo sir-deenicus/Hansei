@@ -1,0 +1,27 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFrameworks>net45;netstandard2.0;netcoreapp2.0</TargetFrameworks> 
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="SymbolicProb.fs" />
+    <None Include="quantum-test.fsx" />
+    <Compile Include="Continuation.fs" />
+    <Compile Include="Hansei.Quantum.fs" />
+    <Compile Include="Utils.fs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="FParsec" Version="1.0.3" />
+    <PackageReference Include="MathNet.Numerics" Version="4.6.0" />
+    <PackageReference Include="MathNet.Numerics.FSharp" Version="4.6.0" />
+    <PackageReference Include="MathNet.Symbolics" Version="0.19.0" />
+    <PackageReference Include="Simple-Symbolics" Version="0.1.1" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Hansei.Continuation\Hansei.Core.fsproj" />
+  </ItemGroup>
+
+</Project>

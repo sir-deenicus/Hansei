@@ -7,11 +7,11 @@ Project("{6EC3EE1D-3C4E-46DD-8F32-0CC8E7565705}") = "Hansei.Core", "Hansei.Conti
 EndProject
 Project("{6EC3EE1D-3C4E-46DD-8F32-0CC8E7565705}") = "Hansei", "Hansei\Hansei.fsproj", "{302B0F86-07C3-42C2-A7A2-13EBD43E1A35}"
 EndProject
-Project("{F2A71F9B-5D33-465A-A702-920D77279786}") = "LogHansei", "LogHansei\LogHansei.fsproj", "{73E88C20-D22B-476A-A0B6-85B0A8883BD6}"
+Project("{6EC3EE1D-3C4E-46DD-8F32-0CC8E7565705}") = "LogHansei", "LogHansei\LogHansei.fsproj", "{73E88C20-D22B-476A-A0B6-85B0A8883BD6}"
 EndProject
-Project("{F2A71F9B-5D33-465A-A702-920D77279786}") = "Hansei.Rational", "Hansei.Rational\Hansei.Rational.fsproj", "{90F3B70D-ED3D-4A80-8D65-6E8FCACEB20E}"
+Project("{6EC3EE1D-3C4E-46DD-8F32-0CC8E7565705}") = "Hansei.Rational", "Hansei.Rational\Hansei.Rational.fsproj", "{90F3B70D-ED3D-4A80-8D65-6E8FCACEB20E}"
 EndProject
-Project("{F2A71F9B-5D33-465A-A702-920D77279786}") = "Hansei.Quantum", "Hansei.Quantum\Hansei.Quantum.fsproj", "{E8B539B4-3082-49B9-B2F4-5A392620A5FC}"
+Project("{6EC3EE1D-3C4E-46DD-8F32-0CC8E7565705}") = "Hansei.SymbolicQuantum", "Hansei.Quantum\Hansei.SymbolicQuantum.fsproj", "{E8B539B4-3082-49B9-B2F4-5A392620A5FC}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution

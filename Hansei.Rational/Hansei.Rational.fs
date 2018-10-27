@@ -181,7 +181,7 @@ let inline limit_reify n model =  explore (Some n) (reify0 model)
 
 //=-=-=-=-=-=-=-=-=-=
 module Distributions =                
-  open Hansei.Rational.Utils
+  open Hansei.Utils.Rational
 
   let bernoulli p = distribution [(p, true); (1N-p, false)]
 
