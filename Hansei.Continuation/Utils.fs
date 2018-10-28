@@ -15,7 +15,7 @@ let filterWith f data =
 
 let rec sample_beta n a b = 
     if n <= 0 then  (round 2 (a/(a+b)))
-    else let i = discreteSample [|a/(a+b);b/(a+b)|]
+    else let i = Stats.discreteSample [|a/(a+b);b/(a+b)|]
          if i = 0 then sample_beta (n - 1) (a+1.) b
          else sample_beta (n-1) a (b+1.)
 

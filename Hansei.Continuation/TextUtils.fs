@@ -2,12 +2,12 @@
             
 open System  
 open Prelude.Common
-
+open Strings
 let stringr100 n x = string (round n (x * 100.))
 
 //////////////
 let buildTableRow (collens:_[]) (row:string[]) =
-       row |> Array.mapi (fun i s ->  String.pad collens.[i] s) |> joinToStringWith " | "
+       row |> Array.mapi (fun i s ->  Strings.pad collens.[i] s) |> joinToStringWith " | "
 
 
 let makeTable newline headers title (table:string[][]) =
