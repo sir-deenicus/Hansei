@@ -20,4 +20,3 @@ cont {
   return (c)} 
   |> qhistogram2 20.
 
-   

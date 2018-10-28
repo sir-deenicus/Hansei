@@ -15,6 +15,10 @@ and ValueContinuation<'T> =
 
 type SymbolicProbabilitySpace<'T> = ListofContinuationTrees<'T>
 
+let valueExtract = function Value x -> x
+
+let valueExtract2 = function Value x -> Some x | _ -> None
+
 let distribution ch k = List.map (fun (p:Expression,v) -> (p, Continued(lazy(k v)))) ch
 
 let fail () = distribution []
@@ -74,4 +78,10 @@ let inline limit_reify n model =  explore (Some n) (reify0 model)
 type Model<'a,'b when 'b : comparison>(thunk:(('a -> SymbolicProbabilitySpace<'a>) -> SymbolicProbabilitySpace<'b>)) =   
      member __.model = thunk
      member __.Reify (?limit) = match limit with None -> exact_reify thunk | Some n -> limit_reify n thunk 
+
+let inline normalize (choices:list<Expression * 'a>) =
+  let sum = List.sumBy (fst) choices
+  List.map (fun (p, v) -> (p/sum, v)) choices
+
+
  
