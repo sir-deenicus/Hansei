@@ -1,0 +1,8 @@
+﻿history 
+
+0.0.1 - rejection
+0.0.5 - importance
+0.0.7 - add distributions
+0.0.8 - backtracking
+0.0.9 - refactor
+0.1.0 - discreteized continuous

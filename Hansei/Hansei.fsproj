@@ -2,9 +2,12 @@
 
   <PropertyGroup>
     <TargetFrameworks>net45;netstandard2.0;netcoreapp2.0</TargetFrameworks>
+    <Version>0.1.0</Version>
+    <Authors>Deen Abiola</Authors>
   </PropertyGroup>
 
   <ItemGroup>
+    <Content Include="history.txt" />
     <None Include="discretized.fsx" />
     <None Include="marvel.fsx" />
     <Compile Include="Hansei.fs" />
