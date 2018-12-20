@@ -8,9 +8,7 @@ open Hansei.Core
 open Hansei.Continuation
 open Hansei.Core.Distributions
 open Hansei
-open MathNet.Numerics.Distributions
-
- 
+open MathNet.Numerics.Distributions 
  
 let zipf s n = Model( cont {
               let! n = discretizedSampler (round 2) (fun () -> Zipf.Sample(s,n) |> float) 10000

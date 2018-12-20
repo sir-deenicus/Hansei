@@ -9,17 +9,42 @@ open Hansei.Continuation
 open Hansei.Core.Distributions
 open Hansei
 
-module Array = 
-  let mapColumn condition f (a:_[][]) =
-      [|for r in 0..a.Length - 1 ->
-          [| for c in 0..a.[0].Length - 1 -> 
-               if condition c a.[r].[c] then f a.[r].[c] else a.[r].[c] |] |]
+module Array =
+    let mapColumn condition f (a: _ [] []) =
+        [|for r in 0..a.Length - 1 -> 
+              [|for c in 0..a.[0].Length - 1 -> 
+                    if condition c a.[r].[c] then f a.[r].[c]
+                    else a.[r].[c]|]|]
 
-let header = "Title;Year;Critic RT;RT count; RT User Score;RT User Count;IMDB;Meta critic; meta user".Split(';')
-let uheader = "RottenTomatoes Critic;RottenTomatoes User;IMDB;Metacritic critic;Metacritic user".Split(';')
+type MovieInfo =
+    {Title: string
+     Year: float
+     ``RottenTomatoes Critic``: float
+     ``RottenTomatoes Critic Vote Count``: float
+     ``RottenTomatoes User Score``: float
+     ``RottenTomatoes User Count``: float
+     IMDB: float
+     ``Metacritic critic``: float
+     ``Metacritic user``: float}
 
-let movies =
-    "
+let arrayToMovieInfo(t,(a: float [])) =
+    {Title = t
+     Year = a.[0]
+     ``RottenTomatoes Critic`` = a.[1]
+     ``RottenTomatoes Critic Vote Count`` = a.[2]
+     ``RottenTomatoes User Score`` = a.[3]
+     ``RottenTomatoes User Count`` = a.[4]
+     IMDB = a.[5]
+     ``Metacritic critic`` = a.[6]
+     ``Metacritic user`` = a.[7]}
+
+let header =
+    "Title;Year;Critic RT;RT count; RT User Score;RT User Count;IMDB;Meta critic; meta user"
+        .Split(';')
+let uheader =
+    "RottenTomatoes Critic;RottenTomatoes User;IMDB;Metacritic critic;Metacritic user"
+        .Split(';')
+let movies = "
     Iron Man;2008;  94;268;  91;1078187;  7.9;  79;  8.5
 
     The Incredible Hulk;  2008;  67;225;  71;736932;  6.8;  61;  7.4
@@ -57,112 +82,139 @@ let movies =
     Black Panther;  2018;  97;282;  76; 53537;  7.8;  88; 6.5
     "
 
-let movienames, stats =
-    movies.Split('\n') 
-     |> Array.mapFilter trim ((<>) "") 
-     |> Array.map (fun line -> 
-         let cols = line.Split(';') 
-         cols.[0],  cols.[1..] |> Array.map float)
-     |> Array.unzip
-      
-type Pattern = 
-   | Diff of int * int * float
-   | Comparison of int * int  
-   | And of Pattern * Pattern
-   | Empty 
+let movienames,stats =
+    movies.Split('\n')
+    |> Array.mapFilter trim ((<>) "")
+    |> Array.map(fun line -> 
+           let cols = line.Split(';')
+           cols.[0],cols.[1..] |> Array.map float)
+    |> Array.unzip
 
-let ratings = Array.selectColumns (set [1;3;5;6;7]) stats |> Array.map (Array.map (fun x -> 10. ** -(floor (log10 x) + 1.) * x ))
+type Pattern =
+    | Diff of int * int * float
+    | Comparison of int * int
+    | And of Pattern * Pattern
+    | Empty
 
+let ratings =
+    Array.selectColumns (set [1;3;5;6;7]) stats 
+    |> Array.map(Array.map(fun x -> 10. ** -(floor(log10 x) + 1.) * x))
 let len = ratings.[0].Length - 1
 
-let rec prettyPrint = function
-      | Comparison(i1,i2) ->  
-         sprintf " %s < %s" uheader.[i1] uheader.[i2]
-      | Diff(i1,i2,diff) ->  
-         sprintf "%s - %s < %f" uheader.[i1] uheader.[i2] diff
-      | And (p1,p2) -> sprintf "%s And %s" (prettyPrint p1) (prettyPrint p2)
-      | Empty -> ""
-
-let rec toFunction = function 
-     | Comparison(i1,i2) -> fun (r:_[]) -> r.[i1] < r.[i2]
-     | Diff(i1,i2,diff) -> fun (r:_[]) -> abs(r.[i1] - r.[i2]) < diff
-     | And (f,g) -> fun r -> toFunction f r && toFunction g r
-     | Empty -> fun _ -> true
-
-let test = function 
-    | filter -> 
-       let f = Array.filter (toFunction filter) ratings 
-       float f.Length / float ratings.Length       
-
-let test2 = 
+let rec prettyPrint =
     function 
+    | Comparison(i1,i2) -> sprintf " %s < %s" uheader.[i1] uheader.[i2]
+    | Diff(i1,i2,diff) -> sprintf "%s - %s < %f" uheader.[i1] uheader.[i2] diff
+    | And(p1,p2) -> sprintf "%s And %s" (prettyPrint p1) (prettyPrint p2)
+    | Empty -> ""
+
+let rec toFunction =
+    function 
+    | Comparison(i1,i2) -> fun (r: _ []) -> r.[i1] < r.[i2]
+    | Diff(i1,i2,diff) -> fun (r: _ []) -> abs(r.[i1] - r.[i2]) < diff
+    | And(f,g) -> fun r -> toFunction f r && toFunction g r
+    | Empty -> fun _ -> true
+
+let testPattern = function 
+    | filter -> 
+        let matched = Array.filter (toFunction filter) ratings
+        float matched.Length / float ratings.Length
+let testPatternsCountFails = function 
     | filter -> 
         let fails = ResizeArray()
-        let f = Array.filteri (fun i (r:_[]) -> 
-                  let cond = (toFunction filter) r
-                  if not cond then fails.Add(movienames.[i]) |> ignore; 
-                  cond) ratings 
-        (float f.Length , float ratings.Length), fails 
+        
+        let matched =
+            Array.filteri (fun i (r: _ []) -> 
+                let cond = (toFunction filter) r
+                if not cond then fails.Add(movienames.[i]) |> ignore
+                cond) ratings
+        (float matched.Length,float ratings.Length),fails
 
-let m = 
-    Model(cont { 
-       let! compare = bernoulli 0.5
-       if compare then
-        let! i1 = uniform_int_range 0 len
-        let! i2 = uniform_int_range 0 len  
-        do! constrain (i1 <> i2) 
-        let pattern = Comparison(i1,i2)
-        let! p = uniform_float 20
-        do! observe (p < test pattern)
-        return pattern
-       else let! i1 = uniform_int_range 0 len
-            let! i2 = uniform_int_range 0 len
-            let (i,j) = lessToLeft (i1, i2) 
-            do! constrain ((i,j) = (0,1) || (i, j) = (3,4) ) 
-            let! r = uniform [0.0..0.05..0.25] 
-            let pattern = Diff(i,j,r)
+let m =
+    Model(cont {
+              let! compare = bernoulli 0.5
+              if compare then 
+                  let! i1 = uniform_int_range 0 len
+                  let! i2 = uniform_int_range 0 len
+                  do! constrain(i1 <> i2)
+                  let pattern = Comparison(i1,i2)
+                  let! p = uniform_float 20
+                  do! observe(p < testPattern pattern)
+                  return pattern
+              else 
+                  let! i1 = uniform_int_range 0 len
+                  let! i2 = uniform_int_range 0 len
+                  let (i,j) = lessToLeft(i1,i2)
+                  do! constrain((i,j) = (0,1) || (i,j) = (3,4))
+                  let! r = uniform [0.0..0.05..0.25]
+                  let pattern = Diff(i,j,r)
+                  let! p = uniform_float 20
+                  do! observe(p < testPattern pattern)
+                  return pattern
+          })
+
+let rec combo maxn n prog =
+    cont {
+        if n > maxn then return prog
+        elif n > 1 then 
+            let! p2 = m.model
+            let pattern = And(prog,p2)
             let! p = uniform_float 20
-            do! observe (p < test pattern)
-            return pattern })
-
-let rec combo maxn n prog = cont {  
-    if n > maxn then return prog
-    elif n > 1 then 
-      let! p2 = m.model 
-      let pattern = And (prog, p2)
-      let! p = uniform_float 20
-      do! observe (p < test pattern)
-      return! combo maxn (n+1) (pattern)
-    else
-      let! p1 = m.model
-      let! p2 = m.model 
-      do! constrain (p1 <> p2)
-      let pattern = And (p1, p2)
-      let! p = uniform_float 20
-      do! observe (p < test pattern)
-      return! combo maxn (n+1) pattern }
+            do! observe(p < testPattern pattern)
+            return! combo maxn (n + 1) (pattern)
+        else 
+            let! p1 = m.model
+            let! p2 = m.model
+            do! constrain(p1 <> p2)
+            let pattern = And(p1,p2)
+            let! p = uniform_float 20
+            do! observe(p < testPattern pattern)
+            return! combo maxn (n + 1) pattern
+    }
 
 let m2 = Model(combo 3 1 Empty)
+let resultsall = m.Reify() |> Utils.normalize
 
-let resultsall = m.Reify() |> Utils.normalize 
-resultsall |> List.sortByDescending fst |> printWith prettyPrint |> Utils.histogram2 20.
+resultsall
+|> List.sortByDescending fst
+|> printWith prettyPrint
+|> Utils.histogram2 20.
 
-let results = m.ImportanceSample(1000, 10) 
-results |> List.sortBy fst |> Utils.normalize |> printWith prettyPrint |> Utils.histogram2 20.
+let results = m.ImportanceSample(1000,10)
 
-let resultsall2 = m2.Reify()|> Utils.normalize 
-resultsall2 |> List.sortByDescending fst |> printWith prettyPrint |> Utils.histogram2 20.
+results
+|> List.sortBy fst
+|> Utils.normalize
+|> printWith prettyPrint
+|> Utils.histogram2 20.
 
-let results2 = m2.ImportanceSample(5000,250) 
+let resultsall2 = m2.Reify() |> Utils.normalize
 
-results2 |> List.sortBy fst |> Utils.normalize |> printWith prettyPrint |> Utils.histogram2 20.
+resultsall2
+|> List.sortByDescending fst
+|> printWith prettyPrint
+|> Utils.histogram2 20.
 
-m2.ImportanceSampleExplore(5000,250,0.5) |> List.sortBy fst |> Utils.normalize |> printWith prettyPrint |> Utils.histogram2 20.
+let results2 = m2.ImportanceSample(5000,250)
 
-List.map (fun (p,Value x) -> prettyPrint x, test2 x) results2 |> List.sortByDescending (snd >> fst >> uncurry2 (/)) |> List.filter (snd >> snd >> fun l -> Seq.length l = 1 && Seq.contains "Black Panther" l)//
-List.map (fun (p,Value x) -> test x |> round 1) results2 |> Seq.counts |> keyValueSeqtoPairArray //
-Model(cont { let! a = uniform ["cat";"dog"] 
-             let r = if a = "cat" then 0.9 else 0.2
-             let! p = uniform_float 10
-             do! observe (p < r)
-             return a} ).Reify()|> Utils.normalize |> Utils.histogram2 20.
+results2
+|> List.sortBy fst
+|> Utils.normalize
+|> printWith prettyPrint
+|> Utils.histogram2 20.
+m2.ImportanceSampleExplore(5000,250,0.5)
+|> List.sortBy fst
+|> Utils.normalize
+|> printWith prettyPrint
+|> Utils.histogram2 20.
+List.map (fun (p,(Value x)) -> prettyPrint x,testPatternsCountFails x) results2
+|> List.sortByDescending(snd
+                         >> fst
+                         >> uncurry2 (/))
+|> List.map(fun (r,((s,t),l)) -> x)
+|> List.filter(snd
+               >> snd
+               >> fun l -> Seq.length l = 1 && Seq.contains "Black Panther" l) //
+List.map (fun (p,(Value x)) -> testPattern x |> round 1) results2
+|> Seq.counts
+|> keyValueSeqtoPairArray //

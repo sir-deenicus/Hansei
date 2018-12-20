@@ -1,12 +1,11 @@
 ﻿module Hansei.Continuation.Rational
 
 open MathNet.Numerics
-
-type ContinuationTree<'T> = list<BigRational * ValueContinuation<'T>>
-and ValueContinuation<'T> = 
+ 
+type ValueContinuation<'T> = 
     | Value of 'T 
-    | Continued of Lazy<ProbabilitySpace<'T>>    
-and ProbabilitySpace<'T> = ContinuationTree<'T>
+    | Continued of Lazy<RationalProbabilitySpace<'T>>    
+and RationalProbabilitySpace<'T> = list<BigRational * ValueContinuation<'T>>  
 
 let reflect tree k =  
     let rec make_choices pv = 

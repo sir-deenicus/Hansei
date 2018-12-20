@@ -18,7 +18,7 @@ let inline reify0 m = m (fun x -> [(1N, Value x)])
 let exactly x = distribution [1N, x]
 
 
-let explore (maxdepth : int option) (choices : ProbabilitySpace<'T>) =
+let explore (maxdepth : int option) (choices : RationalProbabilitySpace<'T>) =
   let rec loop (p:BigRational) depth down susp answers =
     match (down, susp, answers) with
     | (_, [], answers) -> answers 
@@ -34,7 +34,7 @@ let explore (maxdepth : int option) (choices : ProbabilitySpace<'T>) =
       loop p depth down rest (ans, (pt*p,c)::susp)
 
   let (ans, susp) = loop 1N 0 true choices (Map.empty, [])
-  Map.fold (fun a v p -> (p, Value v)::a) susp ans : ContinuationTree<'T>
+  Map.fold (fun a v p -> (p, Value v)::a) susp ans : RationalProbabilitySpace<'T>
 
 let nearly_one = 9007198354021067N/9007199254740992N;
 
@@ -84,7 +84,7 @@ let random_selector  =
       let r = random.NextDouble (0., float ptotal)      (* 0<=r<ptotal *)
       selection r ptotal 0N choices
 
-let rejection_sample_dist selector nsamples ch : 'a ProbabilitySpace =    
+let rejection_sample_dist selector nsamples ch : 'a RationalProbabilitySpace =    
     let t0 = System.DateTime.Now
     
     let rec loop pcontrib ans = function

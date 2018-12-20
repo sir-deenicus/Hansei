@@ -17,7 +17,7 @@
     <PackageReference Include="MathNet.Numerics" Version="4.6.0" />
     <PackageReference Include="MathNet.Numerics.FSharp" Version="4.6.0" />
     <PackageReference Include="MathNet.Symbolics" Version="0.19.0" />
-    <PackageReference Include="Simple-Symbolics" Version="0.1.2" />
+    <PackageReference Include="Simple-Symbolics" Version="0.0.7" />
   </ItemGroup>
 
   <ItemGroup>
