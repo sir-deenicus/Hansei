@@ -2,10 +2,10 @@
 
 open MathNet.Numerics
  
-type ValueContinuation<'T> = 
+type RationalWeightedTree<'T> = 
     | Value of 'T 
     | Continued of Lazy<RationalProbabilitySpace<'T>>    
-and RationalProbabilitySpace<'T> = list<BigRational * ValueContinuation<'T>>  
+and RationalProbabilitySpace<'T> = list<BigRational * RationalWeightedTree<'T>>  
 
 let reflect tree k =  
     let rec make_choices pv = 

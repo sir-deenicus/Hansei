@@ -112,14 +112,14 @@ let rejection_sample_dist selector nsamples ch =
     let t0 = System.DateTime.Now
     
     let rec loop pcontrib ans = function
-        | ([(p,Value v)] :ListofContinuationTrees<_>) -> insertWith (+) v (p * pcontrib) ans
+        | ([(p,Value v)] :ProbabilitySpace<_>) -> insertWith (+) v (p * pcontrib) ans
         | []         -> ans
         | [(p,Continued (Lazy th))] -> loop (p * pcontrib) ans (th)
         | ch ->
             let (ptotal,th) = selector (ch)
             loop (pcontrib * ptotal) ans [(1.0,th)] 
 
-    let rec driver (ch:ListofContinuationTrees<_>) ans = function
+    let rec driver (ch:ProbabilitySpace<_>) ans = function
         | 0 -> let ns = float nsamples 
                let t1 = System.DateTime.Now
                printfn "rejection_sample: done %d worlds\nTime taken: %A seconds" nsamples (round 3 ((t1 - t0).TotalSeconds))
@@ -135,7 +135,7 @@ let sample_dist (maxtime:_ option) maxdepth (selector) (sample_runner) (ch:Proba
     | (p,Value v) -> (insertWith(+) v (p * pcontrib) ans, acc)
     | (p,Continued (Lazy t)) -> 
         match (t)  with
-        | [] -> (ans,(acc:(float * ListofContinuationTrees<_>) list))
+        | [] -> (ans,(acc:(float * ProbabilitySpace<_>) list))
         | [(p1,Value v)] -> 
            (insertWith (+) v (p * p1 * pcontrib) ans, acc)
         | ch ->
@@ -184,7 +184,7 @@ let sample_dist_explore (maxtime:float option) attenuateBy maxdepth (selector) (
        insertWith (+) v (p * pcontrib) ans, acc
   | (p,Continued (Lazy t)) -> 
       match (t)  with
-      | [] -> (ans,(acc:(float * ListofContinuationTrees<_>) list))
+      | [] -> (ans,(acc:(float * ProbabilitySpace<_>) list))
       | [(p1,Value v)] ->  
           (insertWith (+) v (p * p1 * pcontrib) ans, acc)
       | ch ->
@@ -263,9 +263,6 @@ let inline sample_parallel shallowmaxdepth n maxdepth maxtime nsamples (distr) =
  
 let inline exact_reify model   =  explore  None     (reify0 model)  
 let inline limit_reify n model =  explore (Some n) (reify0 model)  
-
-let printWith f x =  
-    List.map (function (p, Value x) -> p, f x | (p, Continued _) -> p, "...") x
 
 type Model<'a,'b when 'b : comparison>(thunk:(('a -> ProbabilitySpace<'a>) -> ProbabilitySpace<'b>)) =   
      member __.model = thunk
@@ -390,12 +387,6 @@ module Distributions =
            let d' = List.mapi (fun i a -> if i = ball then a + 1. else a) d
            return! dirichlet roundto (draws - 1) d'         
   }
-
-  let rec drawrandom draws n pd = cont {
-      if n = 0 then return draws
-      else let! fresh = pd
-           return! drawrandom (fresh::draws) (n-1) pd
-  }    
   
   let discretizedSampler coarsener sampler (n:int) = cont {
       return! categorical ([|for _ in 1..n -> sampler ()|] |> coarsenWith coarsener)   

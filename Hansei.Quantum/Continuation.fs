@@ -2,13 +2,12 @@
 
 open MathNet.Symbolics.Extras
 
-type ListofContinuationTrees<'T> = list<Complex * ValueContinuation<'T>>
-and ValueContinuation<'T> = 
+type QuantumProbabilitySpace<'T> = list<Complex * ComplexWeightedTree<'T>>
+and ComplexWeightedTree<'T> = 
     | Value of 'T 
-    | Continued of Lazy<ListofContinuationTrees<'T>>    
-
-type QuantumProbabilitySpace<'T> = ListofContinuationTrees<'T>
-type MixedProbabilitySpace<'T> = list<float * ValueContinuation<'T>>
+    | Continued of Lazy<QuantumProbabilitySpace<'T>>    
+     
+type MixedProbabilitySpace<'T> = list<float * ComplexWeightedTree<'T>>
 
 let valueExtract = function Value x -> x
 

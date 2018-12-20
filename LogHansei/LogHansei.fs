@@ -63,7 +63,7 @@ let explore (maxdepth : int option) (choices : ProbabilitySpace<'T>) =
       loop p depth down rest (ans, (pt+p,c)::susp)
 
   let (ans, susp) = loop 0. 0 true choices (Map.empty, [])
-  Map.fold (fun a v p -> (p, Value v)::a) susp ans : ListofContinuationTrees<'T>
+  Map.fold (fun a v p -> (p, Value v)::a) susp ans : ProbabilitySpaces<'T>
 
 
 (* Explore but do not flatten the tree: 
@@ -311,14 +311,7 @@ module Distributions =
            let! ball = categorical ps
            let d' = List.mapi (fun i a -> if i = ball then a + 1. else a) d
            return! dirichlet roundto (draws - 1) d'         
-  }
-
-
-  let rec drawrandom draws n pd = cont {
-      if n = 0 then return draws
-      else let! fresh = pd
-           return! drawrandom (fresh::draws) (n-1) pd
-  }     
+  } 
 
   let discretizedSampler coarsener sampler (n:int) = cont {
       return! categorical ([|for _ in 1..n -> sampler ()|] |> (coarsenWith coarsener >> List.map (keepRight log)))

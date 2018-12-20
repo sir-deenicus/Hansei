@@ -220,43 +220,7 @@ module Distributions =
       let! x = uniform_int_range low high
       let r = ceil(log10 (float high))
       return (float x / 10. ** r) } 
-    
-
-  ///stepsizing says how precise you want your discrete approximation to be. The larger it is,
-  ///the larger the space that is being dealt with. And the slower sampling will be. And more memory will be used
-  ///Ex: 10 = [0, 0.1..0.1..1] | 20 = [0, 0.05..0.05..1.0] | 100 = [0, 0.01..0.01..1.0]
-  let normal mean scale stepsizing roundto = cont {
-      let! u = uniform_float_range 1 stepsizing 
-      let! v = uniform_float_range 1 stepsizing 
-      let z = sqrt (-2. * log u)  * cos(2. * pi * v)
-      return round roundto (mean + z * scale)
-  }
-
-  ///stepsizing says how precise you want your discrete approximation to be. The larger it is,
-  ///the larger the space that is being dealt with. And the slower sampling will be. And more memory will be used
-  ///Ex: 10 = [0, 0.1..0.1..1] | 20 = [0, 0.05..0.05..1.0] | 100 = [0, 0.01..0.01..1.0]
-  ///mu scale correspond to what would be the mean , stdev of normal distribution that you get by taking the log of this functions output
-  let lognormal mu scale stepsizing roundto = cont {
-      let! u = uniform_float_range 1 stepsizing 
-      let! v = uniform_float_range 1 stepsizing 
-      let z = sqrt (-2. * log u)  * cos(2. * pi * v)
-      return round roundto (exp(mu + z * scale))
-  }
-
-  ///upper suggsted < 9999 to avoid a sudden jump in the distribution at 1,
-  ///see uniform_float_range for how upper is transformed.
-  let poisson lambda upper = 
-      let p = exp -lambda
-      let rec loop u s p x =
-          if u <= s then x
-          else let x' = x + 1.
-               let p' = p * lambda/x'
-               loop u (s+p') p' x'
-      cont {
-         let! u = uniform_float_range 0 upper 
-         return (loop u p p 0.)
-      }  
-
+   
   let rec geometric n p = cont {
     let! a = bernoulli p
     if a then return n else return! (geometric(n+1) p)
@@ -288,12 +252,6 @@ module Distributions =
            let! ball = categorical ps
            let d' = List.mapi (fun i a -> if i = ball then a + 1N else a) d
            return! dirichlet (draws - 1) d'         
-  }
-
-  let rec drawrandom draws n pd = cont {
-      if n = 0 then return draws
-      else let! fresh = pd
-           return! drawrandom (fresh::draws) (n-1) pd
   }
    
   let discretizedSampler coarsener sampler (n:int) = cont {

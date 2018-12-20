@@ -8,12 +8,10 @@ open MathNet.Symbolics.Extras
 open Prelude.Common
 open MathNet.Numerics
 
-type ListofContinuationTrees<'T> = list<Expression * ValueContinuation<'T>>
-and ValueContinuation<'T> = 
+type SymbolicProbabilitySpace<'T> = list<Expression * SymbolicWeightedTree<'T>>
+and SymbolicWeightedTree<'T> = 
     | Value of 'T 
-    | Continued of Lazy<ListofContinuationTrees<'T>>    
-
-type SymbolicProbabilitySpace<'T> = ListofContinuationTrees<'T>
+    | Continued of Lazy<SymbolicProbabilitySpace<'T>>    
 
 let valueExtract = function Value x -> x
 
