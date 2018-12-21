@@ -234,46 +234,68 @@ let sample_dist_explore (maxtime:float option) attenuateBy maxdepth (selector) (
    supported by the parent reifier.
 *)
 let dist_selector ch =
-  let ptotal = List.fold (fun pa (p,_) -> pa + p) 0.0 ch in
-  (ptotal, distribution (List.map (fun (p,v) -> (p / ptotal, v)) ch))
+    let ptotal = List.fold (fun pa (p, _) -> pa + p) 0.0 ch
+    (ptotal, distribution (List.map (fun (p, v) -> (p / ptotal, v)) ch))
 
-let sample_importanceExplore maxtime selector d attenuateBy maxdpeth nsamples (thunk) =
-  let rec loop th z = function 0 -> (z,nsamples) | n -> loop th (th z) (n-1)
-  sample_dist_explore maxtime attenuateBy maxdpeth 
-    selector 
-    (fun z th -> loop th z nsamples)
-    (shallow_explore d (reify0 thunk)) 
+let sample_importanceExplore maxtime selector d attenuateBy maxdpeth nsamples 
+    (thunk) =
+    let rec loop th z =
+        function 
+        | 0 -> (z, nsamples)
+        | n -> loop th (th z) (n - 1)
+    sample_dist_explore maxtime attenuateBy maxdpeth selector 
+        (fun z th -> loop th z nsamples) (shallow_explore d (reify0 thunk))
+
+let sample_importanceN selector maxtime d maxdpeth nsamples (thunk) =
+    let rec loop th z =
+        function 
+        | 0 -> (z, nsamples)
+        | n -> loop th (th z) (n - 1)
+    sample_dist maxtime maxdpeth selector (fun z th -> loop th z nsamples) 
+        (shallow_explore d (reify0 thunk))
+
+let sample_importance maxdpeth nsamples (thunk) =
+    sample_importanceN random_selector None 3 maxdpeth nsamples (thunk)
+
+let inline sample_parallel shallowmaxdepth n maxdepth maxtime nsamples (distr) : ProbabilitySpace<_> =
+    Array.Parallel.map 
+        (fun _ -> 
+        sample_importanceN random_selector maxtime shallowmaxdepth maxdepth 
+            (nsamples / n) distr) [| 1..n |]
+    |> List.concat
+    |> List.groupBy snd
+    |> List.map (fun (v, ps) -> List.averageBy fst ps, v)
+
+let inline exact_reify model = explore None (reify0 model)
+let inline limit_reify n model = explore (Some n) (reify0 model)
+
+type Model<'a, 'b when 'b : comparison>(thunk : ('a -> ProbabilitySpace<'a>) -> ProbabilitySpace<'b>) =
+    member __.model = thunk
+    member __.ImportanceSample(nsamples, maxdepth, ?maxtime, 
+                               ?shallowExploreDepth, ?selector) =
+        sample_importanceN (defaultArg selector random_selector) maxtime 
+            (defaultArg shallowExploreDepth 3) maxdepth nsamples (thunk)
+    member __.ImportanceSampleParallel(nsamples, nparallel, maxdepth, ?maxtime, 
+                                       ?shallowExploreDepth) =
+        sample_parallel (defaultArg shallowExploreDepth 3) nparallel maxdepth 
+            maxtime nsamples (thunk)
     
-let sample_importanceN selector maxtime d maxdpeth nsamples (thunk)  =
-  let rec loop th z = function 0 -> (z,nsamples) | n -> loop th (th z) (n-1)
-  sample_dist maxtime maxdpeth 
-    selector 
-    (fun z th -> loop th z nsamples)
-    (shallow_explore d (reify0 thunk))
-
-let sample_importance maxdpeth nsamples (thunk) = sample_importanceN random_selector None 3 maxdpeth nsamples (thunk)                                  
-
-let inline sample_parallel shallowmaxdepth n maxdepth maxtime nsamples (distr) =
-    Array.Parallel.map (fun _ -> 
-          sample_importanceN random_selector maxtime shallowmaxdepth maxdepth (nsamples/n) distr) [|1..n|]
-    |> List.concat 
-    |> List.groupBy snd 
-    |> List.map (fun (v,ps) -> List.averageBy fst ps, v) : ProbabilitySpace<_>
-
- 
-let inline exact_reify model   =  explore  None     (reify0 model)  
-let inline limit_reify n model =  explore (Some n) (reify0 model)  
-
-type Model<'a,'b when 'b : comparison>(thunk:(('a -> ProbabilitySpace<'a>) -> ProbabilitySpace<'b>)) =   
-     member __.model = thunk
-     member __.ImportanceSample(nsamples, maxdepth, ?maxtime, ?shallowExploreDepth, ?selector) = sample_importanceN (defaultArg selector random_selector) maxtime (defaultArg shallowExploreDepth 3) maxdepth nsamples (thunk)
-     member __.ImportanceSampleParallel(nsamples,nparallel, maxdepth, ?maxtime, ?shallowExploreDepth) = sample_parallel (defaultArg shallowExploreDepth 3) nparallel maxdepth maxtime nsamples (thunk)
-     member __.Reify (?limit) = match limit with None -> exact_reify thunk | Some n -> limit_reify n thunk
-     member __.RejectionSample nsamples = rejection_sample_dist random_selector nsamples thunk 
+    member __.Reify(?limit) =
+        match limit with
+        | None -> exact_reify thunk
+        | Some n -> limit_reify n thunk
+    
+    member __.RejectionSample nsamples =
+        rejection_sample_dist random_selector nsamples thunk
+    
      ///This method splits the options into two halves, one of low probability and another of high. It picks randomly between the two but an attenuate parameter of < 1. will
      ///more and more heavily favor the top half as one explores deeper into the tree.
-     member __.ImportanceSampleExplore(nsamples,maxdpeth,attenuateBy,?shallowExploreDepth,?maxtime) = 
-               sample_importanceExplore maxtime random_selector (defaultArg shallowExploreDepth 3) attenuateBy maxdpeth nsamples (thunk)     
+    member __.ImportanceSampleExplore(nsamples, maxdpeth, attenuateBy, 
+                                      ?shallowExploreDepth, ?maxtime) =
+        sample_importanceExplore maxtime random_selector 
+            (defaultArg shallowExploreDepth 3) attenuateBy maxdpeth nsamples 
+            (thunk)
+  
 
 //=-=-=-=-=-=-=-=-=-=
 module Distributions =                
