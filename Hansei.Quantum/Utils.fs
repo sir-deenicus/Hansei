@@ -23,7 +23,7 @@ let inline measure0 (choices:list<Complex * 'a>) =
 let inline measure (choices) =  
   List.map (fun (p, v) -> ((Complex.magnitude p) ** 2, valueExtract v)) (qexact_reify choices)
 
-let inline measure2 (choices:list<Complex * 'a>) =  
+let inline measure2 (choices:list<Complex * _ >) =  
   List.map (fun (p, v) -> ((Complex.magnitude p) ** 2, valueExtract v)) (choices)
 ////////////////////////////
 
