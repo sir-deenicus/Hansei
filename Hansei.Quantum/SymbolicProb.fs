@@ -41,7 +41,8 @@ let explore (maxdepth : int option) (choices : SymbolicProbabilitySpace<'T>) =
       loop p depth down rest (ans, (pt*p,c)::susp)
 
   let (ans, susp) = loop 1Q 0 true choices (Map.empty, [])
-  Map.fold (fun a v p -> (p, Value v)::a) susp ans |> List.map (keepRight (Algebraic.simplify true)) : SymbolicProbabilitySpace<'T>
+  Map.fold (fun a v p -> (p, Value v)::a) susp ans 
+  |> List.map (keepRight (Algebraic.simplify true)) : SymbolicProbabilitySpace<'T>
 
 
 module Distributions =    

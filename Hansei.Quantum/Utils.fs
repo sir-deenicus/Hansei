@@ -21,46 +21,53 @@ let inline measure0 (choices:list<Complex * 'a>) =
   List.map (fun (p, v) -> ((Complex.magnitude p) ** 2, v)) choices
 
 let inline measure (choices) =  
-  List.map (fun (p, v) -> ((Complex.magnitude p) ** 2, valueExtract v)) (qexact_reify choices)
+  List.map (fun (p, v) -> ((Complex.magnitude p) ** 2, valueExtract v)) (Q.exact_reify choices)
 
 let inline measure2 (choices:list<Complex * _ >) =  
   List.map (fun (p, v) -> ((Complex.magnitude p) ** 2, valueExtract v)) (choices)
 ////////////////////////////
+module Q =
+    let histogram len (sq) =
+        let d = Seq.toArray sq
+        let maxp,_ = Array.maxBy (fst >> Expression.toFloat) d
 
-let qhistogram len (sq) =
-    let d = Seq.toArray sq
-    let maxp,_ = Array.maxBy (fst >> Expression.toFloat) d
+        Array.map (fun (p:Expression,x)-> 
+              [|sprintf "%A" x ;
+                p.ToFormattedString() ; 
+                String.replicate (int(round 0 (Expression.toFloat (p/maxp) * len))) "#" |]) d
+        |> makeTable "\n" [|"item";"p"; ""|] ""  
 
-    Array.map (fun (p:Expression,x)-> 
-          [|sprintf "%A" x ;
-            p.ToFormattedString() ; 
-            String.replicate (int(round 0 (Expression.toFloat (p/maxp) * len))) "#" |]) d
-    |> makeTable "\n" [|"item";"p"; ""|] ""  
+    let histogram1 measureWith len d =
+        measureWith d 
+        |> List.rev  
+        |> histogram len
 
-let qhistogram1 m len d =
-    m d |> List.rev  
-        |> qhistogram len
+    let histogram2 len d = histogram1 measure len d
 
-let qhistogram2 len d = qhistogram1 measure len d
+    ///////////////
 
-///////////////
+    //===========
+    let inline normalizef (choices:list<float * 'a>) =
+      let sum = List.sumBy (fst) choices
+      List.map (fun (p, v) -> (p/sum, v)) choices
 
-//===========
-let inline normalizef (choices:list<float * 'a>) =
-  let sum = List.sumBy (fst) choices
-  List.map (fun (p, v) -> (p/sum, v)) choices
+    let inline normalize (choices:list<Complex * 'a>) =
+      let sum = List.sumBy (fst >> Complex.magnitude >> squared) choices |> sqrt 
+      List.map (fun (p, v) -> (p /sum, v)) choices
 
-let inline qnormalize (choices:list<Complex * 'a>) =
-  let sum = List.sumBy (fst >> Complex.magnitude>>squared) choices |> sqrt 
-  List.map (fun (p, v) -> (p/sum, v)) choices
+    //////////
 
-//////////
+    let inline mkProbabilityMap t =
+        Map [for (p, v) in (t) do
+              match v with
+               | Value x -> yield (x,p)
+               | _ -> ()]      
 
-let inline mkProbabilityMap t =
-    Map [for (p, v) in (t) do
-          match v with
-           | Value x -> yield (x,p)
-           | _ -> ()]      
+    let measureWithThenToRational m qs = m qs |> List.map (fun (p,x) -> Expression.toRational p, x)
+    let measureWithThenToFloat m qs = m qs |> List.map (fun (p,x) -> Expression.toFloat p, x)
+
+    let measureAsRational qs = measureWithThenToRational measure qs
+    let measureAsRational2 qs = measureWithThenToRational measure2 qs
 
 let amplitude m item = 
     match Map.tryFind item m with
@@ -81,3 +88,4 @@ let inline conditionalQSubspace conditional m =
     
 //=-=-=-=-=-=-=-=-=-=
  ////////////
+
