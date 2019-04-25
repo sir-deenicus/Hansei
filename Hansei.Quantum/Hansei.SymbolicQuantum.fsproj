@@ -16,7 +16,7 @@
     <PackageReference Include="FParsec" Version="1.0.3" />
     <PackageReference Include="MathNet.Numerics" Version="4.7.0" />
     <PackageReference Include="MathNet.Numerics.FSharp" Version="4.7.0" />
-    <PackageReference Include="Simple-Symbolics" Version="0.0.9.2" />
+    <PackageReference Include="Simple-Symbolics" Version="0.0.10.3" />
   </ItemGroup>
 
   <ItemGroup>

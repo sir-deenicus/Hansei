@@ -20,6 +20,12 @@ open MathNet.Symbolics
 open MathNet.Numerics
 open System 
 
+cont {
+    let! a = bernoulli (1/2Q) 
+    let! b = bernoulli (4/5Q)
+    return (a,b)
+} |>  exact_reify//Trace
+
 bell "|0>" "|1>" |> Q.histogram2 20.
  
 rotateX (pi/3) "|1>" |> Q.histogram2 20. 

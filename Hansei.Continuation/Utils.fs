@@ -10,7 +10,13 @@ let filterWith f data =
   let matches = data |> Array.filter f
   (Array.length matches |> float) / (float data.Length)
 
+let variable_elim reify f arg = reflect (reify (f arg))    
+    
+let printWith f x =  
+    List.map (function (p, Value x) -> p, f x | (p, Continued _) -> p, "...") x
 
+let map f l = 
+    [for (p, t) in l do match t with Value(x) -> yield p, Value(f x) | _ -> ()]
 //////////////////////////////////////
 
 let rec sample_beta n a b = 
@@ -68,13 +74,13 @@ let histogram2 len d =
 
 /////////////////////
 
-let insertWith fn key item m =
-    let v' = Map.tryPick (fun k' v' -> if key = k' then Some v' else None) m
-    match v' with
-    | Some v' -> Map.add key (fn item v') m
-    | None -> Map.add key item m 
+//let insertWith fn key item m =
+//    let v' = Map.tryPick (fun k' v' -> if key = k' then Some v' else None) m
+//    match v' with
+//    | Some v' -> Map.add key (fn item v') m
+//    | None -> Map.add key item m 
 
-let insertWith0 fn key item m =    
+let insertWith fn key item m =    
     match Map.tryFind key m with
     | Some v' -> Map.add key (fn item v') m
     | None -> Map.add key item m  

@@ -44,7 +44,6 @@ let explore (maxdepth : int option) (choices : SymbolicProbabilitySpace<'T>) =
   Map.fold (fun a v p -> (p, Value v)::a) susp ans 
   |> List.map (keepRight (Algebraic.simplify true)) : SymbolicProbabilitySpace<'T>
 
-
 module Distributions =    
   let bernoulli p = distribution [(p, true); (1Q-p, false)]
 
@@ -72,7 +71,7 @@ module Distributions =
 let observe test = cont { if not test then return! fail() }
 
 let inline exact_reify model   =  explore None     (reify0 model)  
-let inline limit_reify n model =  explore (Some n) (reify0 model)  
+let inline limit_reify n model =  explore (Some n) (reify0 model)   
 
 type Model<'a,'b when 'b : comparison>(thunk:(('a -> SymbolicProbabilitySpace<'a>) -> SymbolicProbabilitySpace<'b>)) =   
      member __.model = thunk
