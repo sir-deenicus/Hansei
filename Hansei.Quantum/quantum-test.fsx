@@ -27,7 +27,8 @@ cont {
 } |>  exact_reify//Trace
 
 bell "|0>" "|1>" |> Q.histogram2 20.
- 
+bell "|1>" "|1>" 
+|> filterByObserving (fun x -> true) 
 rotateX (pi/3) "|1>" |> Q.histogram2 20. 
 
 rotateX (pi/3) "|1>" |> Q.exact_reify

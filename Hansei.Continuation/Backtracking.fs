@@ -40,11 +40,11 @@ type FairStream() =
    
 let bt = FairStream()
 
-let rec run d st = 
-    match (d,st) with 
+let rec run depth stream = 
+    match (depth,stream) with 
     | _,Nil -> Seq.empty
     | _,One a -> seq { yield a }
-    | _,Choice (a,r) -> seq { yield a; yield! run d r }
+    | _,Choice (a,r) -> seq { yield a; yield! run depth r }
     | Some 0,Incomplete _ -> Seq.empty //exhausted depth
     | d,Incomplete (Lazy r) -> let d' = Option.map ((-) 1) d in run d' r
 

@@ -55,7 +55,7 @@ module Q =
     let inline limit_reify n model =  explore (Some n) (qreify0 model)                   
 
 //=-=-=-=-=-=-=-=-=-=
-let hadamard0 x = 
+let hadamardGate x = 
     if List.sum x <> 1Q then failwith "qubit must be either [1;0] or [0;1]"
     else  Vector x * (1Q/sqrt 2Q) * Matrix [[1Q; 1Q]; [1Q;-1Q]]
           |> Vector.toList
@@ -70,8 +70,8 @@ let bflip = function
 let cnot c b = if c = "|1>" then bflip b else b
 
 let hadamard = function
-     | "|0>" -> hadamard0 [1Q;0Q] 
-     | "|1>" -> hadamard0 [0Q;1Q] 
+     | "|0>" -> hadamardGate [1Q;0Q] 
+     | "|1>" -> hadamardGate [0Q;1Q] 
      | _ -> failwith "Unexpected input. Must be either |0> or |1>"
 
 let vqstate v = 
