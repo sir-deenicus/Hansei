@@ -6,6 +6,22 @@ open System
 open Hansei.Continuation
 open Hansei.Utils
 
+
+type ProbabilitySpace<'T> = list<float * WeightedTree<'T>>
+and WeightedTree<'T> = 
+    | Value of 'T 
+    | Continued of Lazy<ProbabilitySpace<'T>>    
+
+let reflect tree k =  
+    let rec make_choices pv = 
+        List.map (function 
+          | (p, Value x) -> (p, Continued(lazy(k x)))
+          | (p, Continued(Lazy x)) -> (p, Continued(lazy(make_choices x)))) pv
+        
+    make_choices tree  : ProbabilitySpace<_> 
+
+let variable_elim reify f arg = reflect (reify (f arg))    
+
 //===========
 let log_nearly_one = log(1.0 - 1e-7);
 

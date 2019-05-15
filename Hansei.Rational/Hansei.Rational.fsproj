@@ -5,7 +5,7 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <Compile Include="Continuation.fs" />
+    <Compile Include="CoreType.fs" />
     <Compile Include="Utils.fs" />
     <Compile Include="Hansei.Rational.fs" />
   </ItemGroup>

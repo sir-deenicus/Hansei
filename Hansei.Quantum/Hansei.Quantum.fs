@@ -2,7 +2,7 @@ module Hansei.Quantum
 
 open Hansei.Utils
 open Hansei.Continuation   
-open Hansei.Continuation.Quantum
+open Hansei.Types.Quantum
 open MathNet.Symbolics.LinearAlgebra
 open MathNet.Symbolics
 open MathNet.Symbolics.Extras

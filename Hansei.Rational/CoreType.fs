@@ -1,4 +1,4 @@
-﻿module Hansei.Continuation.Rational
+﻿module Hansei.Types.Rational
 
 open MathNet.Numerics
  

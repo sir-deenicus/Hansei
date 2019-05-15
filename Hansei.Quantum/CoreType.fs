@@ -1,4 +1,4 @@
-﻿module Hansei.Continuation.Quantum
+﻿module Hansei.Types.Quantum
 
 open MathNet.Symbolics.Extras
 

@@ -1,7 +1,7 @@
 module Hansei.Rational
 
 open Hansei.Continuation
-open Hansei.Continuation.Rational
+open Hansei.Types.Rational
 open Hansei.Utils
 open MathNet.Numerics
 open Prelude.Common

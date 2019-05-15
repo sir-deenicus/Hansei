@@ -4,8 +4,8 @@ open Prelude.Common
 open Prelude.Math
 open Hansei.TextUtils
 open Hansei.Continuation
-open Hansei.Continuation.Quantum     
-open Hansei.Quantum        
+open Hansei.Quantum     
+open Hansei.Types.Quantum       
 open MathNet.Symbolics
 open MathNet.Symbolics.Extras  
 

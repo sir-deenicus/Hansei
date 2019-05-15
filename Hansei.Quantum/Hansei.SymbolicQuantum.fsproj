@@ -7,7 +7,7 @@
   <ItemGroup>
     <Compile Include="SymbolicProb.fs" />
     <None Include="quantum-test.fsx" />
-    <Compile Include="Continuation.fs" />
+    <Compile Include="CoreType.fs" />
     <Compile Include="Hansei.Quantum.fs" />
     <Compile Include="Utils.fs" />
   </ItemGroup>
