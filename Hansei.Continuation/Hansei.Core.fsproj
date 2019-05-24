@@ -5,6 +5,7 @@
     <GeneratePackageOnBuild>true</GeneratePackageOnBuild>
     <Authors>Deen Abiola</Authors>
     <Version>0.2.6</Version>
+    <AssemblyName>Hansei.Continuation</AssemblyName>
   </PropertyGroup>
 
   <ItemGroup>

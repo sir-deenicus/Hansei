@@ -10,6 +10,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\Hansei.Continuation\Hansei.Core.fsproj" />
+    <ProjectReference Include="..\Hansei\Hansei.fsproj" />
   </ItemGroup>
 
 </Project>
