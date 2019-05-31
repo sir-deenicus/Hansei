@@ -64,6 +64,12 @@ let insertWith fn key item m =
     | Some v' -> Map.add key (fn item v') m
     | None -> Map.add key item m  
 
+let insertWithx fn key item (d:Dict<_,_>) = 
+    match d.tryFind key with
+    | Some v' -> d.[key] <- (fn item v') 
+    | None -> d.Add(key, item)
+    d
+
 let inline insertWith2 fn key item (m:MapSlim<_,_>) =   
     match m.GetOption key with
     | ValueSome v' -> m.Set (key, fn item v')  

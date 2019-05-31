@@ -123,6 +123,29 @@ let shallow_explore2 maxdepth (choices:ProbabilitySpace<_> ) =
       for i in 0..ans.Count - 1 -> 
         let v, p = ans.[i] 
         p, Value v] : ProbabilitySpace<_>
+
+
+let shallow_explore3 maxdepth (choices:ProbabilitySpace<_> ) =
+    let add_answer pcontrib v mp = insertWithx (+) v pcontrib mp 
+    let rec loop pc depth ans acc = function
+    | [] -> (ans,acc)
+    | (p,Value v)::rest -> loop pc depth (add_answer (p * pc) v ans) acc rest
+    | c::rest when depth >= maxdepth -> loop pc depth ans (c::acc) rest
+    | (p,Continued (Lazy t))::rest -> 
+      let (ans,ch) = loop (pc * p) (depth + 1) ans [] (t) 
+      let ptotal = List.fold (fun pa (p,_) -> pa + p) 0.0 ch 
+      let acc =
+        if ptotal = 0.0 then acc
+        else if ptotal < nearly_one then
+             (p * ptotal, 
+              let ch = List.map (fun (p,x) -> (p / ptotal,x)) ch          
+              Continued (lazy ch))::acc
+            else (p, Continued (lazy ch))::acc 
+      loop pc depth ans acc rest
+    
+    let (ans,susp) = loop 1.0 0 (Dict()) [] choices
+    [ yield! susp
+      for (KeyValue(v,p)) in ans -> p, Value v] : ProbabilitySpace<_>
 (* ------------------------------------------------------------------------ *)
 (*	Approximate inference strategies:				    *)
 (*  Trace a few paths from the root to a leaf of the search tree            *)
@@ -169,7 +192,7 @@ let rejection_sample_dist selector nsamples ch =
     driver (reify0 ch) Map.empty nsamples  : 'a ProbabilitySpace
 
                           
-let sample_dist (maxtime:_ option) maxdepth (selector) (sample_runner) (ch:ProbabilitySpace<_>)  =
+let sample_dist0 (maxtime:_ option) maxdepth (selector) (sample_runner) (ch:ProbabilitySpace<_>)  =
     let start = System.DateTime.Now
     let look_ahead pcontrib (ans,acc) = function (* explore the branch a bit *)
     | (p,Value v) -> (insertWith(+) v (p * pcontrib) ans, acc)
@@ -214,6 +237,55 @@ let sample_dist (maxtime:_ option) maxdepth (selector) (sample_runner) (ch:Proba
           (* List.rev is for literal compatibility with an earlier version *)
         | (ans,cch) -> driver pcontrib ans (List.rev cch) 
     make_threads 0 1.0 Map.empty ch : ProbabilitySpace<_> 
+
+let sample_dist (maxtime:_ option) maxdepth (selector) (sample_runner) (ch:ProbabilitySpace<_>)  =
+    let start = System.DateTime.Now
+    let look_ahead pcontrib (ans,acc) = function (* explore the branch a bit *)
+    | (p,Value v) -> (insertWithx (+) v (p * pcontrib) ans, acc)
+    | (p,Continued (Lazy t)) -> 
+        match (t)  with
+        | [] -> (ans,(acc:(float * ProbabilitySpace<_>) list))
+        | [(p1,Value v)] -> 
+           (insertWithx (+) v (p * p1 * pcontrib) ans, acc)
+        | ch ->
+            let ptotal = List.fold (fun pa (p,_) -> pa + p) 0.0 ch 
+            (ans,
+              if ptotal < nearly_one then
+                (p * ptotal, List.map (fun (p,x) -> (p / ptotal,x)) ch)::acc 
+              else (p, ch)::acc)        
+    let rec loop depth pcontrib (ans:Dict<_,_>) = function
+    | [(p,Value v)]  -> insertWithx (+) v (p * pcontrib) ans
+    | []         -> ans
+    | [(p,Continued (Lazy th))] -> loop (depth+1) (p * pcontrib) ans (th)
+    | ch when depth < maxdepth && (maxtime.IsNone || (System.DateTime.Now - start).TotalSeconds < maxtime.Value) -> (* choosing one thread randomly *)    
+        match List.fold (look_ahead pcontrib) (ans,[]) ch with
+        | (ans,[]) -> ans
+        | (ans,cch) ->
+           let (ptotal,th:ProbabilitySpace<_>) = selector cch 
+           loop (depth+1) (pcontrib * ptotal) ans th  
+    | _ -> ans    
+    let toploop pcontrib ans cch = (* cch are already pre-explored *)
+        let (ptotal,th) = selector cch 
+        loop 0 (pcontrib * ptotal) ans th 
+    let driver pcontrib vals cch =
+        let (ans,nsamples) = 
+             sample_runner (Dict()) (fun ans -> toploop pcontrib ans cch)  
+        let ns = float nsamples  
+        //let ans = Map.fold (fun ans v p  -> insertWith (+) v (ns * p) ans) ans vals 
+        for (KeyValue(v,p)) in vals do  
+            insertWithx (+) v (ns * p) ans |> ignore
+        printfn "sample_importance: done %d worlds\n" nsamples;
+        //Map.fold (fun a v p -> (p / ns,Value v)::a) [] ans       
+        [for (KeyValue(v,p)) in ans -> p/ns, Value v]
+    let rec make_threads depth pcontrib ans ch =  (* pre-explore initial threads *)
+        match List.fold (look_ahead pcontrib) (ans,[]) ch with
+        | (ans,[]) -> (* pre-exploration solved the problem *) 
+          [for (KeyValue(v,p)) in ans -> p, Value v]
+        | (ans,[(p,ch)]) when depth < maxdepth -> (* only one choice, make more *)
+           make_threads (depth+1) (pcontrib * p) ans ch
+          (* List.rev is for literal compatibility with an earlier version *)
+        | (ans,cch) -> driver pcontrib ans (List.rev cch) 
+    make_threads 0 1.0 (Dict()) ch : ProbabilitySpace<_> 
 
 let sample_dist2 (maxtime:_ option) maxdepth (selector) (sample_runner) (ch:ProbabilitySpace<_>)  =
     let start = System.DateTime.Now
@@ -280,7 +352,7 @@ let sample_importanceN selector maxtime d maxdpeth nsamples (thunk) =
         function 
         | 0 -> (z, nsamples)
         | n -> loop th (th z) (n - 1)
-    sample_dist maxtime maxdpeth selector (fun z th -> loop th z nsamples) 
+    sample_dist0 maxtime maxdpeth selector (fun z th -> loop th z nsamples) 
         (shallow_explore d (reify0 thunk))
 
 let sample_importanceN2 selector maxtime d maxdpeth nsamples (thunk) =
@@ -290,6 +362,14 @@ let sample_importanceN2 selector maxtime d maxdpeth nsamples (thunk) =
         | n -> loop th (th z) (n - 1)
     sample_dist2 maxtime maxdpeth selector (fun z th -> loop th z nsamples) 
         (shallow_explore2 d (reify0 thunk))
+
+let sample_importanceN3 selector maxtime d maxdpeth nsamples (thunk) =
+    let rec loop th z =
+        function 
+        | 0 -> (z, nsamples)
+        | n -> loop th (th z) (n - 1)
+    sample_dist maxtime maxdpeth selector (fun z th -> loop th z nsamples) 
+        (shallow_explore3 d (reify0 thunk))
 
 let sample_importance maxdpeth nsamples (thunk) =
     sample_importanceN random_selector None 3 maxdpeth nsamples (thunk)
@@ -316,10 +396,13 @@ type Model() =
                                           ?shallowExploreDepth, ?selector) =
         sample_importanceN2 (defaultArg selector random_selector) maxtime 
             (defaultArg shallowExploreDepth 3) maxdepth nsamples (thunk)
-
-    static member ImportanceSample(thunk,nsamples, maxdepth, ?maxtime, 
-                                   ?shallowExploreDepth, ?selector) =
+    static member ImportanceSampleOld(thunk,nsamples, maxdepth, ?maxtime, 
+                                        ?shallowExploreDepth, ?selector) =
         sample_importanceN (defaultArg selector random_selector) maxtime 
+            (defaultArg shallowExploreDepth 3) maxdepth nsamples (thunk)
+    static member ImportanceSample(thunk,nsamples, maxdepth, ?maxtime, 
+                                    ?shallowExploreDepth, ?selector) =
+        sample_importanceN3 (defaultArg selector random_selector) maxtime 
             (defaultArg shallowExploreDepth 3) maxdepth nsamples (thunk)
     static member Reify(thunk, ?limit) =
         match limit with
