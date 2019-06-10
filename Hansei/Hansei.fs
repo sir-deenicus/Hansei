@@ -409,7 +409,7 @@ type Model() =
         | None -> exact_reify thunk
         | Some n -> limit_reify n thunk
 
-type Model<'a, 'b when 'b : comparison>(thunk : ('a -> ProbabilitySpace<'a>) -> ProbabilitySpace<'b>) =
+type ModelFrom<'a, 'b when 'b : comparison>(thunk : ('a -> ProbabilitySpace<'a>) -> ProbabilitySpace<'b>) =
     member __.model = thunk
     member __.ImportanceSample(nsamples, maxdepth, ?maxtime, 
                                ?shallowExploreDepth, ?selector) =
@@ -441,6 +441,16 @@ module ProbabilitySpace =
          
     let mapValue f (p,v) = 
         p, match v with Value x -> Value(f x) | _ -> failwith "error"
+    
+    let inline top l =
+        l
+        |> List.sortByDescending fst 
+        |> List.head
+
+    let best l =
+        l
+        |> List.maxBy fst 
+        |> snd
 
     let map f l = 
         [for (p,v) in l do
