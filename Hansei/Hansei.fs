@@ -74,6 +74,28 @@ let explore (maxdepth : int option) (choices : ProbabilitySpace<'T>) =
   let (ans, susp) = loop 1.0 0 true choices (Map.empty, [])
   Map.fold (fun a v p -> (p, Value v)::a) susp ans : ProbabilitySpace<'T>
 
+let explore2 (maxdepth : int option) (choices : ProbabilitySpace<'T>) =
+  let rec loop p depth down susp answers =
+    match (down, susp, answers) with
+    | (_, [], answers) -> answers 
+ 
+    | (_, (pt, Value v) :: rest, (ans, susp)) ->
+      loop p depth down rest (insertWithx (+) v (pt*p) ans, susp)
+ 
+    | (true, (pt,Continued (Lazy t))::rest, answers) ->
+      let down' = match maxdepth with Some x -> depth < x | None -> true
+      loop p depth true rest <| loop (pt*p) (depth+1) down' (t) answers
+ 
+    | (down, (pt,c)::rest, (ans,susp)) ->
+      loop p depth down rest (ans, (pt*p,c)::susp)
+
+  //let (ans, susp) = loop 1.0 0 true choices (Map.empty, [])
+  let (ans,susp) = loop 1.0 0 true choices (Dict(), [])  
+  //Map.fold (fun a v p -> (p, Value v)::a) susp ans : ProbabilitySpace<'T>
+  [ yield! susp
+    for (KeyValue(v,p)) in ans -> p, Value v] : ProbabilitySpace<_>
+
+
 let nearly_one = 1.0 - 1e-7;
 
 (* Explore but do not flatten the tree: 
@@ -382,14 +404,11 @@ let inline sample_parallel shallowmaxdepth n maxdepth maxtime nsamples (distr) :
     |> List.concat
     |> List.groupBy snd
     |> List.map (fun (v, ps) -> List.averageBy fst ps, v)
+    
+let inline exact_reify2 model = explore2 None (reify0 model)  
 
 let inline exact_reify model = explore None (reify0 model)
 let inline limit_reify n model = explore (Some n) (reify0 model)
-
-(*The core idea is a system that takes a uniform distribution and then uses weighted experts
-at each input. These are saved by hashing trick. Returns either a categorical, top subset of uniform, or uniform of top most uncertain about*)
-module SmartGuide =
-    ()
 
 type Model() = 
     static member ImportanceSampleFast(thunk,nsamples, maxdepth, ?maxtime, 
