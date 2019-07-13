@@ -4,8 +4,9 @@
     <TargetFrameworks>net47;netstandard2.0;netcoreapp2.1</TargetFrameworks>
     <GeneratePackageOnBuild>true</GeneratePackageOnBuild>
     <Authors>Deen Abiola</Authors>
-    <Version>0.2.7</Version>
-    <AssemblyName>Hansei.Continuation</AssemblyName>
+    <Version>0.2.8</Version>
+    <AssemblyName>Hansei.Core</AssemblyName>
+    <PackageId>Hansei.Core</PackageId>
   </PropertyGroup>
 
   <ItemGroup>

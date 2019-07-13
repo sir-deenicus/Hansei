@@ -47,9 +47,42 @@ let inline explore one (maxdepth : int option) (choices : GenericProbabilitySpac
 let inline exact_reify one model = explore one None (reify0 one model)
 let inline limit_reify one n model = explore one (Some n) (reify0 one model)
 
+let intToExpression = BigRational.FromInt >> Expression.FromRational
+let intToRational = BigRational.FromInt 
+
+let observe test = cont { if not test then return! fail() }
+
 type Model() =  
     static member inline Reify(one, thunk, ?limit) = 
         match limit with
         | None -> exact_reify one thunk
         | Some n -> limit_reify one n thunk
-         
+
+type ModelFrom<'w, 'a, 'b>(reify0, explore : int option -> GenericProbabilitySpace<'w,'a> -> GenericProbabilitySpace<_,_>,thunk : ('a -> GenericProbabilitySpace<'w, 'a>) -> GenericProbabilitySpace<'w,'b>) =
+    let exact_reify model = explore None (reify0 model)
+    let limit_reify n model = explore (Some n) (reify0 model)
+    member __.model = thunk 
+    member __.Reify(?limit:int) =
+        match limit with
+        | None -> exact_reify thunk : GenericProbabilitySpace<'w,'b>
+        | Some n -> limit_reify n thunk   
+        
+module Distributions =    
+  let inline bernoulli one p = distribution [(p, true); (one - p, false)]
+
+  let inline bernoulliChoice one p (a,b) = distribution [(p, a); (one - p, b)]
+                                                          
+  let inline uniform one f (items:'a list) = 
+      let len = f items.Length
+      distribution (List.map (fun item -> one/len, item) items)
+
+  let categorical distr = distribution distr 
+
+  let rec geometric bernoulli n p = cont {
+    let! a = bernoulli p
+    if a then return n else return! (geometric bernoulli (n+1) p)
+  } 
+
+  let discretizedSampler coarsener sampler (n:int) = cont {
+      return! categorical ([|for _ in 1..n -> sampler ()|] |> coarsenWith coarsener)   
+  }
