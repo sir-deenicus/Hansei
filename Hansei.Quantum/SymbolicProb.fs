@@ -26,12 +26,12 @@ let inline reify0 m = m (fun x -> [(1Q, Value x)])
 let exactly x = distribution [1Q, x] 
 
 let explore (maxdepth : int option) (choices : SymbolicProbabilitySpace<'T>) =
-  let rec loop (p:Expression) depth down susp answers =
+  let rec loop p depth down susp answers =
     match (down, susp, answers) with
     | (_, [], answers) -> answers 
  
     | (_, (pt, Value v) :: rest, (ans, susp)) ->
-      loop p depth down rest (insertWith (+) v (pt*p) ans, susp)
+      loop p depth down rest (insertWithx (+) v (pt*p) ans, susp)
  
     | (true, (pt,Continued (Lazy t))::rest, answers) ->
       let down' = match maxdepth with Some x -> depth < x | None -> true
@@ -39,10 +39,10 @@ let explore (maxdepth : int option) (choices : SymbolicProbabilitySpace<'T>) =
  
     | (down, (pt,c)::rest, (ans,susp)) ->
       loop p depth down rest (ans, (pt*p,c)::susp)
-
-  let (ans, susp) = loop 1Q 0 true choices (Map.empty, [])
-  Map.fold (fun a v p -> (p, Value v)::a) susp ans 
-  |> List.map (keepRight (Algebraic.simplify true)) : SymbolicProbabilitySpace<'T>
+       
+  let (ans,susp) = loop 1Q 0 true choices (Dict(), [])   
+  [ yield! susp
+    for (KeyValue(v,p)) in ans -> Algebraic.simplify true p, Value v] : SymbolicProbabilitySpace<_>
 
 module Distributions =    
   let bernoulli p = distribution [(p, true); (1Q-p, false)]

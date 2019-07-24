@@ -29,7 +29,7 @@ let inline explore one (maxdepth : int option) (choices : GenericProbabilitySpac
   let rec loop p depth down susp answers =
     match (down, susp, answers) with
     | (_, [], answers) -> answers 
- 
+    
     | (_, (pt, Value v) :: rest, (ans, susp)) ->
       loop p depth down rest (insertWithx (+) v (pt*p) ans, susp)
  
