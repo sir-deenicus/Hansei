@@ -1,0 +1,75 @@
+﻿let shallow_explore maxdepth (choices:ProbabilitySpace<_> ) =
+    let add_answer pcontrib v mp = insertWith (+) v pcontrib mp 
+    let rec loop pc depth ans acc = function
+    | [] -> (ans,acc)
+    | (p,Value v)::rest -> loop pc depth (add_answer (p * pc) v ans) acc rest
+    | c::rest when depth >= maxdepth -> loop pc depth ans (c::acc) rest
+    | (p,Continued (Lazy t))::rest -> 
+      let (ans,ch) = loop (pc * p) (depth + 1) ans [] (t) 
+      let ptotal = List.fold (fun pa (p,_) -> pa + p) 0.0 ch 
+      let acc =
+        if ptotal = 0.0 then acc
+        else if ptotal < nearly_one then
+             (p * ptotal, 
+              let ch = List.map (fun (p,x) -> (p / ptotal,x)) ch          
+              Continued (lazy ch))::acc
+            else (p, Continued (lazy ch))::acc 
+      loop pc depth ans acc rest
+    
+    let (ans,susp) = loop 1.0 0 Map.empty [] choices
+    Map.fold (fun a v p -> (p,Value v)::a) susp ans : ProbabilitySpace<_>
+
+
+let sample_dist0 maxdepth (selector) (sample_runner) (ch:ProbabilitySpace<_>) =
+    let look_ahead pcontrib (ans,acc) = function (* explore the branch a bit *)
+    | (p,Value v) -> (insertWith(+) v (p * pcontrib) ans, acc)
+    | (p,Continued (Lazy t)) -> 
+        match (t)  with
+        | [] -> (ans,(acc:(float * ProbabilitySpace<_>) list))
+        | [(p1,Value v)] -> 
+           (insertWith (+) v (p * p1 * pcontrib) ans, acc)
+        | ch ->
+            let ptotal = List.fold (fun pa (p,_) -> pa + p) 0.0 ch 
+            (ans,
+              if ptotal < nearly_one then
+                (p * ptotal, List.map (fun (p,x) -> (p / ptotal,x)) ch)::acc 
+              else (p, ch)::acc)        
+    let rec loop depth pcontrib ans = function
+    | [(p,Value v)]  -> insertWith (+) v (p * pcontrib) ans
+    | []         -> ans
+    | [(p,Continued (Lazy th))] -> loop (depth+1) (p * pcontrib) ans (th)
+    | ch when depth < maxdepth -> (* choosing one thread randomly *)    
+        match List.fold (look_ahead pcontrib) (ans,[]) ch with
+        | (ans,[]) -> ans
+        | (ans,cch) ->
+           let (ptotal,th:ProbabilitySpace<_>) = selector cch 
+           loop (depth+1) (pcontrib * ptotal) ans th  
+    | _ -> ans    
+    let toploop pcontrib ans cch = (* cch are already pre-explored *)
+        let (ptotal,th) = selector cch 
+        loop 0 (pcontrib * ptotal) ans th 
+    let driver pcontrib vals cch =
+        let (ans,nsamples) = 
+             sample_runner Map.empty (fun ans -> toploop pcontrib ans cch)  
+        let ns = float nsamples  
+        let ans = Map.fold (fun ans v p  -> insertWith (+) v (ns * p) ans) ans vals 
+        printfn "sample_importance: done %d worlds\n" nsamples;
+        Map.fold (fun a v p -> (p / ns,Value v)::a) [] ans       
+    let rec make_threads depth pcontrib ans ch =  (* pre-explore initial threads *)
+        match List.fold (look_ahead pcontrib) (ans,[]) ch with
+        | (ans,[]) -> (* pre-exploration solved the problem *)
+          Map.fold (fun a v p -> (p,Value v)::a) [] ans
+        | (ans,[(p,ch)]) when depth < maxdepth -> (* only one choice, make more *)
+           make_threads (depth+1) (pcontrib * p) ans ch
+          (* List.rev is for literal compatibility with an earlier version *)
+        | (ans,cch) -> driver pcontrib ans (List.rev cch) 
+    make_threads 0 1.0 Map.empty ch : ProbabilitySpace<_> 
+
+let inline sample_parallel shallowmaxdepth n maxdepth maxtime nsamples (distr) : ProbabilitySpace<_> =
+    Array.Parallel.map 
+        (fun _ -> 
+        sample_importanceN random_selector maxtime shallowmaxdepth maxdepth 
+            (nsamples / n) distr) [| 1..n |]
+    |> List.concat
+    |> List.groupBy snd
+    |> List.map (fun (v, ps) -> List.averageBy fst ps, v)

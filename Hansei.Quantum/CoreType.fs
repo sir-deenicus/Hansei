@@ -1,6 +1,6 @@
 ﻿module Hansei.Types.Quantum
 
-open MathNet.Symbolics.Extras
+open MathNet.Symbolics
 
 type QuantumProbabilitySpace<'T> = list<Complex * ComplexWeightedTree<'T>>
 and ComplexWeightedTree<'T> = 

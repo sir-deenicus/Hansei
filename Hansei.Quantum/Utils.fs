@@ -7,7 +7,7 @@ open Hansei.Continuation
 open Hansei.Quantum     
 open Hansei.Types.Quantum       
 open MathNet.Symbolics
-open MathNet.Symbolics.Extras  
+open MathNet.Symbolics.Core
 
 module Map =
   let sum m = Map.fold (fun sum _ x -> sum + x) (Complex 0Q) m

@@ -6,6 +6,10 @@ open Prelude.Math
 open System
 open Hansei.Continuation
 open CollectionSlim
+open Prelude.Collections.FibonacciHeap
+open Prelude.Collections
+open Microsoft.Collections.Extensions
+open System.Collections.Generic
 
 
 //////////////////////////////////////

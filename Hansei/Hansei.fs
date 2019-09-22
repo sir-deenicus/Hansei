@@ -82,26 +82,6 @@ let nearly_one = 1.0 - 1e-7;
 (* Explore but do not flatten the tree: 
    perform exact inference to the given depth
    We still pick out all the produced answers and note the failures. *)
-let shallow_explore maxdepth (choices:ProbabilitySpace<_> ) =
-    let add_answer pcontrib v mp = insertWith (+) v pcontrib mp 
-    let rec loop pc depth ans acc = function
-    | [] -> (ans,acc)
-    | (p,Value v)::rest -> loop pc depth (add_answer (p * pc) v ans) acc rest
-    | c::rest when depth >= maxdepth -> loop pc depth ans (c::acc) rest
-    | (p,Continued (Lazy t))::rest -> 
-      let (ans,ch) = loop (pc * p) (depth + 1) ans [] (t) 
-      let ptotal = List.fold (fun pa (p,_) -> pa + p) 0.0 ch 
-      let acc =
-        if ptotal = 0.0 then acc
-        else if ptotal < nearly_one then
-             (p * ptotal, 
-              let ch = List.map (fun (p,x) -> (p / ptotal,x)) ch          
-              Continued (lazy ch))::acc
-            else (p, Continued (lazy ch))::acc 
-      loop pc depth ans acc rest
-    
-    let (ans,susp) = loop 1.0 0 Map.empty [] choices
-    Map.fold (fun a v p -> (p,Value v)::a) susp ans : ProbabilitySpace<_>
 
 let shallow_explore2 maxdepth (choices:ProbabilitySpace<_> ) =
     let add_answer pcontrib v mp = insertWith2 (+) v pcontrib mp 
@@ -154,97 +134,138 @@ let shallow_explore3 maxdepth (choices:ProbabilitySpace<_> ) =
    (V v) -- and return the resulting tree. If the tree turns out to
    have no leaves, return the empty tree.
 *) 
-let rec first_success = function
+let rec first_success maxdepth = function
   | [] -> [] : ProbabilitySpace<_>
+  | _ when maxdepth = 0 -> [] 
   | ((_,Value _) :: _) as l  -> l
   | (pt,Continued (Lazy t)) :: rest -> (* Unclear: expand and do BFS *)
-      first_success (rest @ List.map (fun (p,v) -> (pt * p,v)) t)
- 
-let discreteSampleL ps =  
-    Stats.discreteSample (Array.normalize [|for (p,_) in ps -> p|])
+      first_success (maxdepth - 1) (rest @ List.map (fun (p,v) -> (pt * p,v)) t)
 
-let discreteSampleLOpp ps =  
-    Stats.discreteSample (Array.normalize [|for (p,_) in ps -> 1. - p|])  
+let discreteSampleL ps =  
+    Stats.discreteSample (Array.normalize [|for (p,w,_) in ps -> p * w|])
+
+let discreteSampleLOpp ps =
+    [| for (p, w,_) in ps ->
+           if p = 0. then p * w
+           else 1. - (p * w) |]
+    |> Array.normalize
+    |> Stats.discreteSample 
 
 let rec sampleN_without_replacement sampler n i ch =
     function
-    | r when i >= n -> ch, r
-    | [] -> ch, []
+    | _ when i >= n -> ch
+    | [] -> ch
     | choices ->
-        let choice = sampler choices
+        let choiceIndex = sampler choices
         let mutable c = -1
         let mutable found = None
 
         let rem =
             [ for x in choices do
                   c <- c + 1
-                  if c <> choice then yield x
+                  if c <> choiceIndex then yield x
                   else found <- Some x ]
-        sampleN_without_replacement sampler n (i + 1) (found.Value :: ch) rem
+        sampleN_without_replacement sampler n (i + 1) ((choiceIndex, found.Value)::ch) rem
 
 type SearchSpace<'a, 'b> =
     | Thunk of (('a -> ProbabilitySpace<'a>) -> 'b)
     | Reified of ProbabilitySpace<'a>
 
-type Closure<'a> =
-    | CThunk of (unit -> ProbabilitySpace<'a>)
-
 //This sampler takes after beam search or even breadth first search
 //when the width is high enough. Suspended/uninvestigated thunks are passed along so that
 //search is like a partial scan across to some depth with each iteration filling in more of
 //the space.
-let best_first_sample_dist (maxtime:_ option) lowp maxdepth width niters space =
+let best_first_sample_dist (maxtime : _ option) allowlookahead prevtabu lowp
+    maxwidth maxdepth width niters space =
     let t0 = System.DateTime.Now
+    let paths = defaultArg prevtabu (Dict<int32 list, float>())
+    let maxbeamdepth = int (log maxwidth / log (float width))
 
-    let rec loop depth condprob jointprob ans =
+    let inline testPath k =
+        match paths.tryFind k with
+        | Some -1. -> true, -1.
+        | Some x -> false, x
+        | None -> false, 1.
+
+    let rec propagateUp r =
         function
-        | ch when depth > maxdepth
-                  || (maxtime.IsSome
-                       && (DateTime.Now - t0).TotalSeconds > maxtime.Value) ->
-            ans, ch
-        | [] -> ans, []
-        | ([ (p, Value v) ] : ProbabilitySpace<_>) ->
-            insertWithx addPairs v (p * jointprob,1.) ans, []
-        | [ (p, Continued(Lazy th)) ] ->
-            loop (depth + 1) p (p * jointprob) ans (th)
-        | ch ->
-            let choices, unchosen =
-                if random.NextDouble() < lowp then
-                    sampleN_without_replacement discreteSampleLOpp width 0 [] ch
-                else sampleN_without_replacement discreteSampleL width 0 [] ch
-        
-            let selected =
-                choices
-                |> List.map (fun (p, t) -> loop (depth + 1) p (jointprob) ans [p, t])
+        | _ when r < 0.01 -> ()
+        | [] -> ()
+        | (_ :: path) ->
+            paths.ExpandElseAdd path (fun v ->
+                if v = -1. then v
+                else max 0. (v + v * r)) (1. + r)
+            propagateUp (r * 0.5) path
 
-            let aggr = Dict() 
-            let suspf =
-                [ yield! unchosen
-                  for (samples, susp) in selected do
-                      aggr.MergeWith addPairs samples
-                      match susp with 
-                      | [] -> ()
-                      | _ -> yield (condprob, Continued (lazy susp)) ]
-            aggr, suspf
+    let rec loop inlookahead maxd (curpath : int32 list) depth pcontrib ans =
+        function
+        | [] ->
+            propagateUp -0.1 curpath
+            paths.ExpandElseAdd curpath (fun _ -> -1.) -1.
+            ans
+        | ([ (p, Value v) ] : ProbabilitySpace<_>) ->
+            propagateUp 0.1 curpath
+            paths.ExpandElseAdd curpath (fun _ -> -1.) -1.
+            Hansei.Utils.insertWithx (fun _ t -> t) v (p * pcontrib, 1.) ans
+        | [ (p, Continued(Lazy th)) ] ->
+            loop inlookahead maxd curpath (depth + 1) (p * pcontrib) ans (th)
+        | _ when depth > maxdepth
+                 || (maxtime.IsSome
+                     && (DateTime.Now - t0).TotalSeconds > maxtime.Value) -> ans
+        | ch ->
+            let aggr =
+                if allowlookahead && not inlookahead then
+                    loop true (min maxdepth (depth + 1)) curpath (depth + 1)
+                        (pcontrib) ans ch
+                else Dict()
+
+            let fch =
+                ch
+                |> List.mapi (fun i (p, t) ->
+                       let pass, w = testPath (i :: curpath)
+                       if pass then 0., 0., t
+                       else p, w, t)
+
+            let bwidth =
+                if depth > maxbeamdepth then 1
+                else width
+
+            let choices =
+                if inlookahead then List.indexed fch
+                else if random.NextDouble() < lowp then
+                    sampleN_without_replacement discreteSampleLOpp bwidth 0 []
+                        fch
+                else sampleN_without_replacement discreteSampleL bwidth 0 [] fch
+
+            let selected =
+                [ for (b, (p, _, t)) in choices do
+                      if p <> 0. then
+                          yield loop inlookahead maxd (b :: curpath) (depth + 1)
+                                    (pcontrib) ans [ p, t ] ]
+
+            for samples in selected do
+                aggr.MergeWith (fun _ t -> t) samples
+            aggr
 
     let rec sampler (ch : ProbabilitySpace<_>) ans =
         function
         | 0 ->
             let t1 = System.DateTime.Now
-            printfn "done %d iterations\nTime taken: %A seconds" niters
+            printfn "done %d worlds\nTime taken: %A seconds" niters
                 (round 3 ((t1 - t0).TotalSeconds))
-            [ for (KeyValue(v, (p,n))) in ans -> p/n, Value v ], ch //: ProbabilitySpace<_>
+            [ for (KeyValue(v, (p, n))) in ans -> p / n, Value v ], ch, paths
         | n ->
-            let ans, ch' = loop 0 1. 1.0 ans ch
-            sampler ch' ans (n - 1)
+            let ans = loop false maxdepth [] 0 1.0 ans ch
+            sampler ch ans (n - 1)
 
-    let ch = 
+    let ch =
         match space with
         | Thunk t -> reify0 t
         | Reified p -> p
 
-    sampler (ch) (Dict()) niters : ('a ProbabilitySpace * 'a ProbabilitySpace)
-    
+    sampler (ch) (Dict()) niters : 'a ProbabilitySpace * 'a ProbabilitySpace * Dict<int32 list, float>
+
+
 (* ------------------------------------------------------------------------ *)
 (*	Approximate inference strategies:				                        *)
 (*  Trace a few paths from the root to a leaf of the search tree            *)
@@ -291,51 +312,6 @@ let rejection_sample_dist selector nsamples ch =
         | n -> driver ch (loop 1.0 ans ch) (n-1) 
     driver (reify0 ch) Map.empty nsamples  : 'a ProbabilitySpace
                           
-let sample_dist0 maxdepth (selector) (sample_runner) (ch:ProbabilitySpace<_>) =
-    let look_ahead pcontrib (ans,acc) = function (* explore the branch a bit *)
-    | (p,Value v) -> (insertWith(+) v (p * pcontrib) ans, acc)
-    | (p,Continued (Lazy t)) -> 
-        match (t)  with
-        | [] -> (ans,(acc:(float * ProbabilitySpace<_>) list))
-        | [(p1,Value v)] -> 
-           (insertWith (+) v (p * p1 * pcontrib) ans, acc)
-        | ch ->
-            let ptotal = List.fold (fun pa (p,_) -> pa + p) 0.0 ch 
-            (ans,
-              if ptotal < nearly_one then
-                (p * ptotal, List.map (fun (p,x) -> (p / ptotal,x)) ch)::acc 
-              else (p, ch)::acc)        
-    let rec loop depth pcontrib ans = function
-    | [(p,Value v)]  -> insertWith (+) v (p * pcontrib) ans
-    | []         -> ans
-    | [(p,Continued (Lazy th))] -> loop (depth+1) (p * pcontrib) ans (th)
-    | ch when depth < maxdepth -> (* choosing one thread randomly *)    
-        match List.fold (look_ahead pcontrib) (ans,[]) ch with
-        | (ans,[]) -> ans
-        | (ans,cch) ->
-           let (ptotal,th:ProbabilitySpace<_>) = selector cch 
-           loop (depth+1) (pcontrib * ptotal) ans th  
-    | _ -> ans    
-    let toploop pcontrib ans cch = (* cch are already pre-explored *)
-        let (ptotal,th) = selector cch 
-        loop 0 (pcontrib * ptotal) ans th 
-    let driver pcontrib vals cch =
-        let (ans,nsamples) = 
-             sample_runner Map.empty (fun ans -> toploop pcontrib ans cch)  
-        let ns = float nsamples  
-        let ans = Map.fold (fun ans v p  -> insertWith (+) v (ns * p) ans) ans vals 
-        printfn "sample_importance: done %d worlds\n" nsamples;
-        Map.fold (fun a v p -> (p / ns,Value v)::a) [] ans       
-    let rec make_threads depth pcontrib ans ch =  (* pre-explore initial threads *)
-        match List.fold (look_ahead pcontrib) (ans,[]) ch with
-        | (ans,[]) -> (* pre-exploration solved the problem *)
-          Map.fold (fun a v p -> (p,Value v)::a) [] ans
-        | (ans,[(p,ch)]) when depth < maxdepth -> (* only one choice, make more *)
-           make_threads (depth+1) (pcontrib * p) ans ch
-          (* List.rev is for literal compatibility with an earlier version *)
-        | (ans,cch) -> driver pcontrib ans (List.rev cch) 
-    make_threads 0 1.0 Map.empty ch : ProbabilitySpace<_> 
-
 let sample_dist maxdepth (selector) (sample_runner) (ch:ProbabilitySpace<_>) =
     let look_ahead pcontrib (ans,acc) = function (* explore the branch a bit *)
     | (p,Value v) -> (insertWithx (+) v (p * pcontrib) ans, acc)
@@ -495,14 +471,6 @@ let dist_selector ch =
     let ptotal = List.fold (fun pa (p, _) -> pa + p) 0.0 ch
     (ptotal, distribution (List.map (fun (p, v) -> (p / ptotal, v)) ch))
 
-let sample_importanceN selector maxtime d maxdpeth nsamples (thunk) =
-    let rec loop th z =
-        function 
-        | 0 -> (z, nsamples)
-        | n -> loop th (th z) (n - 1)
-    sample_dist0 maxdpeth selector (fun z th -> loop th z nsamples) 
-        (shallow_explore d (reify0 thunk))
-
 let sample_importanceN2 selector maxtime d maxdpeth nsamples (thunk) =
     let rec loop th z =
         function 
@@ -532,18 +500,9 @@ let sample_importanceN4 (maxtime : _ option) selector lowp d maxdpeth nsamples
     sample_distb lowp maxdpeth selector (fun z th -> loop th z nsamples)
         (shallow_explore3 d (reify0 thunk))
 
-let sample_importance maxdpeth nsamples (thunk) =
-    sample_importanceN random_selector None 3 maxdpeth nsamples (thunk)
-     
-let inline sample_parallel shallowmaxdepth n maxdepth maxtime nsamples (distr) : ProbabilitySpace<_> =
-    Array.Parallel.map 
-        (fun _ -> 
-        sample_importanceN random_selector maxtime shallowmaxdepth maxdepth 
-            (nsamples / n) distr) [| 1..n |]
-    |> List.concat
-    |> List.groupBy snd
-    |> List.map (fun (v, ps) -> List.averageBy fst ps, v)
-    
+let sample_importance maxtime maxdpeth nsamples (thunk) =
+    sample_importanceN3 random_selector maxtime 3 maxdpeth nsamples (thunk)
+             
 let inline exact_reify model = explore None (reify0 model)
 let inline limit_reify n model = explore (Some n) (reify0 model)
 
@@ -552,17 +511,10 @@ type Model() =
                                        ?shallowExploreDepth, ?selector) =
         sample_importanceN2 (defaultArg selector random_selector) maxtime
             (defaultArg shallowExploreDepth 3) maxdepth nsamples (thunk)
-
-    static member ImportanceSampleOld(thunk, nsamples, maxdepth, ?maxtime,
-                                      ?shallowExploreDepth, ?selector) =
-        sample_importanceN (defaultArg selector random_selector) maxtime
-            (defaultArg shallowExploreDepth 3) maxdepth nsamples (thunk)
-
     static member ImportanceSample(thunk, nsamples, maxdepth, ?maxtime,
                                    ?shallowExploreDepth, ?selector) =
         sample_importanceN3 (defaultArg selector random_selector) maxtime
             (defaultArg shallowExploreDepth 3) maxdepth nsamples (thunk)
-
     static member ImportanceSampleExplore(thunk, nsamples, maxdepth,
                                           ?lowprobBranchExploreProbability,
                                           ?maxtime, ?shallowExploreDepth,
@@ -570,6 +522,13 @@ type Model() =
         sample_importanceN4 maxtime (defaultArg selector random_selector)
             (defaultArg lowprobBranchExploreProbability 0.1)
             (defaultArg shallowExploreDepth 3) maxdepth nsamples (thunk)
+    static member SampleBreadth(space, niters, maxdepth, ?width, ?maxwidth,
+                                ?state, ?lowprobBranchExploreProbability,
+                                ?allowlookahead, ?maxtime) =
+        best_first_sample_dist maxtime (defaultArg allowlookahead true)
+            (defaultArg state None)
+            (defaultArg lowprobBranchExploreProbability 0.1)
+            (defaultArg maxwidth 8.) maxdepth (defaultArg width 2) niters space
     static member Reify(thunk, ?limit) =
         match limit with
         | None -> exact_reify thunk
@@ -577,15 +536,11 @@ type Model() =
 
 type ModelFrom<'a, 'b when 'b : comparison>(thunk : ('a -> ProbabilitySpace<'a>) -> ProbabilitySpace<'b>) =
     member __.model = thunk
-    member __.ImportanceSample(nsamples, maxdepth, ?maxtime, 
-                               ?shallowExploreDepth, ?selector) =
-        sample_importanceN (defaultArg selector random_selector) maxtime 
-            (defaultArg shallowExploreDepth 3) maxdepth nsamples (thunk)
 
-    member __.ImportanceSampleParallel(nsamples, nparallel, maxdepth, ?maxtime, 
-                                       ?shallowExploreDepth) =
-        sample_parallel (defaultArg shallowExploreDepth 3) nparallel maxdepth 
-            maxtime nsamples (thunk)
+    member __.ImportanceSample(nsamples, maxdepth, ?maxtime,
+                                   ?shallowExploreDepth, ?selector) =
+        sample_importanceN3 (defaultArg selector random_selector) maxtime
+            (defaultArg shallowExploreDepth 3) maxdepth nsamples (thunk)
     
     member __.Reify(?limit) =
         match limit with
@@ -623,11 +578,13 @@ module ProbabilitySpace =
             match v with 
             | Value x -> yield (p, Value(f x))
             | _ -> yield (p,v)]
+
     let mapValues f l = 
         [for (p,v) in l do
             match v with 
             | Value x -> yield (p, (f x))
             | _ -> ()]
+
     let inline mkProbabilityMap t =
         Map [for (p, v) in (normalize t) do
               match v with

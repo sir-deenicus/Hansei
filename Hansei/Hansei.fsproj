@@ -8,6 +8,7 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <Content Include="original-sampler.txt" />
     <Content Include="history.txt" />
     <None Include="discretized.fsx" />
     <None Include="marvel.fsx" />

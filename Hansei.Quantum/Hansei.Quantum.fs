@@ -5,7 +5,6 @@ open Hansei.Continuation
 open Hansei.Types.Quantum
 open MathNet.Symbolics.LinearAlgebra
 open MathNet.Symbolics
-open MathNet.Symbolics.Extras
 
 //Core of Hansei modified from base:
 //https://gist.github.com/einblicker/3245547#file-hansei

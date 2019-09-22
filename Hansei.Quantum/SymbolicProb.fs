@@ -4,9 +4,9 @@ open System
 open Hansei.Utils
 open Hansei.Continuation    
 open MathNet.Symbolics
-open MathNet.Symbolics.Extras 
 open Prelude.Common
 open MathNet.Numerics
+open MathNet.Symbolics.Core
 
 type SymbolicProbabilitySpace<'T> = list<Expression * SymbolicWeightedTree<'T>>
 and SymbolicWeightedTree<'T> = 
