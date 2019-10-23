@@ -175,11 +175,14 @@ type SearchSpace<'a, 'b> =
 //when the width is high enough. Suspended/uninvestigated thunks are passed along so that
 //search is like a partial scan across to some depth with each iteration filling in more of
 //the space.
-let best_first_sample_dist (maxtime : _ option) allowlookahead prevtabu lowp
-    maxwidth maxdepth width niters space =
+let best_first_sample_dist (maxtime : _ option) (maxlookahead : _ option) 
+    allowlookahead prevtabu lowp
+    maxwidth maxdepthval width niters space =
     let t0 = System.DateTime.Now
     let paths = defaultArg prevtabu (Dict<int32 list, float>())
     let maxbeamdepth = int (log maxwidth / log (float width))
+    let maxlook = defaultArg maxlookahead -1
+    let maxdepth = if maxdepthval % 2 = 0 then maxdepthval + 1 else maxdepthval
 
     let inline testPath k =
         match paths.tryFind k with
@@ -231,7 +234,11 @@ let best_first_sample_dist (maxtime : _ option) allowlookahead prevtabu lowp
                 else width
 
             let choices =
-                if inlookahead then List.indexed fch
+                if inlookahead then 
+                    if maxlook = -1 then List.indexed fch
+                    else fch |> List.indexed 
+                             |> List.sortByDescending (snd >> snd3) 
+                             |> List.take (min fch.Length maxlook)
                 else if random.NextDouble() < lowp then
                     sampleN_without_replacement discreteSampleLOpp bwidth 0 []
                         fch
@@ -522,13 +529,14 @@ type Model() =
         sample_importanceN4 maxtime (defaultArg selector random_selector)
             (defaultArg lowprobBranchExploreProbability 0.1)
             (defaultArg shallowExploreDepth 3) maxdepth nsamples (thunk)
-    static member SampleBreadth(space, niters, maxdepth, ?width, ?maxwidth,
-                                ?state, ?lowprobBranchExploreProbability,
-                                ?allowlookahead, ?maxtime) =
-        best_first_sample_dist maxtime (defaultArg allowlookahead true)
+    static member SampleBreadth(space, niters, maxdepth, ?beamwidth, ?maxbranches,
+                                ?state,?maxlookaheadwidth, ?allowlookahead,  
+                                ?lowprobBranchExploreProbability,
+                                ?maxtime) =
+        best_first_sample_dist maxtime (defaultArg maxlookaheadwidth None) (defaultArg allowlookahead true)
             (defaultArg state None)
             (defaultArg lowprobBranchExploreProbability 0.1)
-            (defaultArg maxwidth 8.) maxdepth (defaultArg width 2) niters space
+            (defaultArg maxbranches 8.) maxdepth (defaultArg beamwidth 2) niters space
     static member Reify(thunk, ?limit) =
         match limit with
         | None -> exact_reify thunk
