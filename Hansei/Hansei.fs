@@ -211,7 +211,7 @@ let best_first_sample_dist (maxtime : _ option) (maxlookahead : _ option)
             paths.ExpandElseAdd curpath (fun _ -> -1.) -1.
             Hansei.Utils.insertWithx (fun _ t -> t) v (p * pcontrib, 1.) ans
         | [ (p, Continued(Lazy th)) ] ->
-            loop inlookahead maxd curpath (depth + 1) (p * pcontrib) ans (th)
+            loop true maxd curpath (depth + 1) (p * pcontrib) ans (th)
         | _ when depth > maxdepth
                  || (maxtime.IsSome
                      && (DateTime.Now - t0).TotalSeconds > maxtime.Value) -> ans
@@ -240,9 +240,9 @@ let best_first_sample_dist (maxtime : _ option) (maxlookahead : _ option)
                              |> List.sortByDescending (snd >> snd3) 
                              |> List.take (min fch.Length maxlook)
                 else if random.NextDouble() < lowp then
-                    sampleN_without_replacement discreteSampleLOpp bwidth 0 []
-                        fch
-                else sampleN_without_replacement discreteSampleL bwidth 0 [] fch
+                        sampleN_without_replacement discreteSampleLOpp bwidth 0 []
+                            fch
+                     else sampleN_without_replacement discreteSampleL bwidth 0 [] fch
 
             let selected =
                 [ for (b, (p, _, t)) in choices do
@@ -390,10 +390,10 @@ let sample_distb lowp maxdepth (selector) (sample_runner) (ch:ProbabilitySpace<_
         | (ans,[]) -> ans
         | (ans,cch) ->
            let (ptotal,th:ProbabilitySpace<_>) = 
-            //there's a chance we will explore a low probability branch
-            if random.NextDouble() < lowp then 
-                selector (List.map (fun (p,t) -> 1. - p, t) cch)
-            else selector cch
+                //there's a chance we will explore a low probability branch
+                if random.NextDouble() < lowp then 
+                    selector (List.map (fun (p,t) -> 1. - p, t) cch)
+                else selector cch
            loop (depth+1) (pcontrib * ptotal) ans th  
     | _ -> ans    
     let toploop pcontrib ans cch = (* cch are already pre-explored *)
