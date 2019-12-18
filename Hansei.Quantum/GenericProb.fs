@@ -60,7 +60,9 @@ module GenericProb =
             | None -> exact_reify one thunk
             | Some n -> limit_reify one n thunk
 
-    type ModelFrom<'w, 'a, 'b>(reify0, explore : int option -> GenericProbabilitySpace<'w,'a> -> GenericProbabilitySpace<_,_>,thunk : ('a -> GenericProbabilitySpace<'w, 'a>) -> GenericProbabilitySpace<'w,'b>) =
+    type ModelFrom<'w, 'a, 'b>
+        (reify0, explore : int option -> GenericProbabilitySpace<'w,'a> -> GenericProbabilitySpace<_,_>, 
+            thunk : ('a -> GenericProbabilitySpace<'w, 'a>) -> GenericProbabilitySpace<'w,'b>) =
         let exact_reify model = explore None (reify0 model)
         let limit_reify n model = explore (Some n) (reify0 model)
         member __.model = thunk 
@@ -69,25 +71,44 @@ module GenericProb =
             | None -> exact_reify thunk : GenericProbabilitySpace<'w,'b>
             | Some n -> limit_reify n thunk   
         
+    module ProbabilitySpace =
+        let map f l = 
+            [for (p,v) in l do
+                match v with 
+                | Value x -> yield (p, Value(f x))
+                | _ -> yield (p,v)]
+
+        let mapValues f l = 
+            [for (p,v) in l do
+                match v with 
+                | Value x -> yield (p, (f x))
+                | _ -> ()] 
+            
+        let mapValuesProb fp f l = 
+            [for (p,v) in l do
+                match v with 
+                | Value x -> yield (fp p, (f x))
+                | _ -> ()]
+
     module Distributions =    
-      let inline bernoulli one p = distribution [(p, true); (one - p, false)]
+        let inline bernoulli one p = distribution [(p, true); (one - p, false)]
 
-      let inline bernoulliChoice one p (a,b) = distribution [(p, a); (one - p, b)]
+        let inline bernoulliChoice one p (a,b) = distribution [(p, a); (one - p, b)]
                                                           
-      let inline uniform one f (items:'a list) = 
-          let len = f items.Length
-          distribution (List.map (fun item -> one/len, item) items)
+        let inline uniform one f (items:'a list) = 
+            let len = f items.Length
+            distribution (List.map (fun item -> one/len, item) items)
 
-      let categorical distr = distribution distr 
+        let categorical distr = distribution distr 
 
-      let rec geometric bernoulli n p = cont {
-        let! a = bernoulli p
-        if a then return n else return! (geometric bernoulli (n+1) p)
-      } 
+        let rec geometric bernoulli n p = cont {
+            let! a = bernoulli p
+            if a then return n else return! (geometric bernoulli (n+1) p)
+        } 
 
-      let discretizedSampler coarsener sampler (n:int) = cont {
-          return! categorical ([|for _ in 1..n -> sampler ()|] |> coarsenWith coarsener)   
-      }
+        let discretizedSampler coarsener sampler (n:int) = cont {
+            return! categorical ([|for _ in 1..n -> sampler ()|] |> coarsenWith coarsener)   
+        }
 
 module Visualization =
     open Hansei.Visualization

@@ -171,6 +171,22 @@ type SearchSpace<'a, 'b> =
     | Thunk of (('a -> ProbabilitySpace<'a>) -> 'b)
     | Reified of ProbabilitySpace<'a>
 
+let inline testPath (paths : Dict<_,_>) x =
+    match paths.tryFind x with
+    | Some -1. -> true, -1.
+    | Some r -> false, r
+    | None -> false, 1.
+
+let rec propagateUp attenuateUp (paths : Dict<_,_>) r =
+    function
+    | _ when r < 0.01 -> ()
+    | [] -> ()
+    | (_ :: path) ->
+        paths.ExpandElseAdd path (fun v ->
+            if v = -1. then v
+            else max 0. (v + v * r)) (1. + r)
+        propagateUp attenuateUp paths (r * attenuateUp) path
+
 //This sampler takes after beam search or even breadth first search
 //when the width is high enough. Suspended/uninvestigated thunks are passed along so that
 //search is like a partial scan across to some depth with each iteration filling in more of
@@ -209,7 +225,7 @@ let best_first_sample_dist (maxtime : _ option) (maxlookahead : _ option)
         | ([ (p, Value v) ] : ProbabilitySpace<_>) ->
             propagateUp 0.1 curpath
             paths.ExpandElseAdd curpath (fun _ -> -1.) -1.
-            Hansei.Utils.insertWithx (fun _ t -> t) v (p * pcontrib, 1.) ans
+            Utils.insertWithx (fun _ t -> t) v (p * pcontrib, 1.) ans
         | [ (p, Continued(Lazy th)) ] ->
             loop true maxd curpath (depth + 1) (p * pcontrib) ans (th)
         | _ when depth > maxdepth
@@ -587,6 +603,12 @@ module ProbabilitySpace =
             | Value x -> yield (p, Value(f x))
             | _ -> yield (p,v)]
 
+    let mapValuesProb fp f l = 
+        [for (p,v) in l do
+            match v with 
+            | Value x -> yield (fp p, (f x))
+            | _ -> ()]
+
     let mapValues f l = 
         [for (p,v) in l do
             match v with 
@@ -597,7 +619,7 @@ module ProbabilitySpace =
         Map [for (p, v) in (normalize t) do
               match v with
                | Value x -> yield (x,p)
-               | _ -> ()]    
+               | _ -> ()]     
 
 module Distributions =                
 

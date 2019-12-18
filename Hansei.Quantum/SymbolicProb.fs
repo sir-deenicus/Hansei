@@ -44,6 +44,24 @@ let explore (maxdepth : int option) (choices : SymbolicProbabilitySpace<'T>) =
   [ yield! susp
     for (KeyValue(v,p)) in ans -> Algebraic.simplify true p, Value v] : SymbolicProbabilitySpace<_>
 
+module ProbabilitySpace =
+    let map f l = 
+        [for (p,v) in l do
+            match v with 
+            | Value x -> yield (p, Value(f x))
+            | _ -> yield (p,v)]
+    let mapValues f l = 
+        [for (p,v) in l do
+            match v with 
+            | Value x -> yield (p , (f x))
+            | _ -> ()]
+            
+    let mapValuesProb fp f l = 
+        [for (p,v) in l do
+            match v with 
+            | Value x -> yield (fp p, (f x))
+            | _ -> ()]
+
 module Distributions =    
   let bernoulli p = distribution [(p, true); (1Q-p, false)]
 
