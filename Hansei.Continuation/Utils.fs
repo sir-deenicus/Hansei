@@ -80,8 +80,7 @@ let inline insertWith2 fn key item (m:MapSlim<_,_>) =
     | ValueNone -> m.Set(key, item)
     m
 ///////////////
-
-//===========
+ 
 let filterWith f data = 
   let matches = data |> Array.filter f
   (Array.length matches |> float) / (float data.Length) 
@@ -110,7 +109,7 @@ let inline conditionalSubspace conditional m =
     let sub = Map.filter (fun k _ -> conditional k) m    
     Map.normalize sub
     
-let inline marginalize p = List.sumBy fst p
+let inline sum p = List.sumBy fst p
 
 let inline filterToSubspace conditional m = Map.filter (fun k _ -> conditional k) m    
 
@@ -131,11 +130,13 @@ let histogram2 len d =
       |> Array.rev
       |> histogram len
 
-let coarsenWith f samples =  
-       Array.groupBy f samples
-    |> Array.map (fun (x,xs) -> float xs.Length, x) 
+let inline coarsenWithGeneric tonumber f samples =  
+    Array.groupBy f samples
+    |> Array.map (fun (x,xs) -> tonumber xs.Length, x) 
     |> List.ofArray
     |> normalize
+
+let coarsenWith f samples = coarsenWithGeneric float f samples
 
 let inline mapDistr projectTo m = 
     Map.toArray m 
@@ -146,9 +147,7 @@ let inline mapDistr projectTo m =
  ////////////
 let toBits x = x / log 2. 
 
-let inline log0 x = if x = 0. then 0. else log x
-
-//let inline entropy dist = -Seq.sumBy (fun (_,p) -> p * log0 p) dist
+let inline log0 x = if x = 0. then 0. else log x 
 
 let inline entropy dist = -(Map.map (fun _ (ToFloat p) -> p * log0 p) dist |> Map.sum)
 
@@ -159,8 +158,7 @@ let inline mutualInformation (joint:Map<_,_>) =
         
         let fpx,fpy,fpxy = float px, float py, float pxy
 
-        fpxy * log0(fpxy/(fpx * fpy)))
-
+        fpxy * log0(fpxy/(fpx * fpy))) 
 
 let inline kldivergence (pA:Map<_,_>) (pB:Map<_,_>) =
     pA |> Map.map (fun x p_a ->        

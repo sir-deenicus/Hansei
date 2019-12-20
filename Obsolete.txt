@@ -1,0 +1,60 @@
+The following are approaches that ended up not being needed or used:
+
+//=-=-=-=-=-=-=-=-=-=
+module Distributions =                
+  open Hansei.Utils.Rational
+
+  let bernoulli p = distribution [(p, true); (1N-p, false)]
+
+  let bernoulliChoice p (a,b) = distribution [(p, a); (1N-p, b)]
+                                                          
+  let uniform (items:'a list) = 
+      let num = BigRational.FromInt items.Length
+      distribution (List.map (fun item -> 1N/num, item) items)
+
+  let categorical distr = distribution distr 
+
+  //=-=-=-=-=-=-=-=-=-=
+  
+  let probabilityOf2 m item = 
+        match Map.tryFind item m with
+            | None -> 0N
+            | Some p -> p 
+
+  (* Uniform choice from [0..(n-1)] *)
+  let uniform_int = function
+   | 1 -> exactly 0
+   | n when n > 1 -> uniform [0..(n-1)]
+   | _ -> failwith "uniform: non-positive count n"
+
+  let uniform_int_range low high = cont {
+      let! i = uniform_int (high - low + 1)
+      return low + i } 
+
+  ///stepsizing says how precise you want your discrete approximation to be. The larger it is,
+  ///the larger the space that is being dealt with. And the slower sampling will be. And more memory will be used
+  ///Ex: 10 = [0, 0.1..0.1..1] | 20 = [0, 0.05..0.05..1.0] | 100 = [0, 0.01..0.01..1.0]
+
+  let uniform_float stepsizing = cont {
+      let! u_ = uniform_int_range 0 stepsizing 
+      return (float u_ / float stepsizing)
+      }
+ 
+  ///low high works this way 10...90 => 0.1..0.9 | 10..900 => 0.1..0.01..0.9
+  ///1..950 => 0.01..0.01..0.95
+  let uniform_float_range low high = cont {
+      let! x = uniform_int_range low high
+      let r = ceil(log10 (float high))
+      return (float x / 10. ** r) } 
+    
+
+
+  let rec dirichlet3 draws a b c = cont {
+      if draws <= 0 then return [|a/(a+b+c);b/(a+b+c);c/(a+b+c)|]
+      else let! ball = categorical [a/(a+b+c),1;b/(a+b+c),2;c/(a+b+c),3]
+           if ball = 1 then return! dirichlet3 (draws - 1) (a+1N) b c
+           elif ball = 2 then return! dirichlet3 (draws - 1) a (b+1N) c
+           else return! dirichlet3 (draws-1) a b (c+1N)
+  }
+
+   

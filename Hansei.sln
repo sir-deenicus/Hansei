@@ -9,9 +9,12 @@ Project("{6EC3EE1D-3C4E-46DD-8F32-0CC8E7565705}") = "Hansei", "Hansei\Hansei.fsp
 EndProject
 Project("{6EC3EE1D-3C4E-46DD-8F32-0CC8E7565705}") = "LogHansei", "LogHansei\LogHansei.fsproj", "{73E88C20-D22B-476A-A0B6-85B0A8883BD6}"
 EndProject
-Project("{6EC3EE1D-3C4E-46DD-8F32-0CC8E7565705}") = "Hansei.Rational", "Hansei.Rational\Hansei.Rational.fsproj", "{90F3B70D-ED3D-4A80-8D65-6E8FCACEB20E}"
-EndProject
 Project("{6EC3EE1D-3C4E-46DD-8F32-0CC8E7565705}") = "Hansei.SymbolicQuantum", "Hansei.Quantum\Hansei.SymbolicQuantum.fsproj", "{E8B539B4-3082-49B9-B2F4-5A392620A5FC}"
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Solution Items", "Solution Items", "{E4AAD597-EA04-4C9B-9BC6-F90096A0042D}"
+	ProjectSection(SolutionItems) = preProject
+		Obsolete.txt = Obsolete.txt
+	EndProjectSection
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
@@ -31,10 +34,6 @@ Global
 		{73E88C20-D22B-476A-A0B6-85B0A8883BD6}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{73E88C20-D22B-476A-A0B6-85B0A8883BD6}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{73E88C20-D22B-476A-A0B6-85B0A8883BD6}.Release|Any CPU.Build.0 = Release|Any CPU
-		{90F3B70D-ED3D-4A80-8D65-6E8FCACEB20E}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
-		{90F3B70D-ED3D-4A80-8D65-6E8FCACEB20E}.Debug|Any CPU.Build.0 = Debug|Any CPU
-		{90F3B70D-ED3D-4A80-8D65-6E8FCACEB20E}.Release|Any CPU.ActiveCfg = Release|Any CPU
-		{90F3B70D-ED3D-4A80-8D65-6E8FCACEB20E}.Release|Any CPU.Build.0 = Release|Any CPU
 		{E8B539B4-3082-49B9-B2F4-5A392620A5FC}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
 		{E8B539B4-3082-49B9-B2F4-5A392620A5FC}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{E8B539B4-3082-49B9-B2F4-5A392620A5FC}.Release|Any CPU.ActiveCfg = Release|Any CPU

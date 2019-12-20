@@ -5,12 +5,6 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <Compile Include="CoreType.fs" />
-    <Compile Include="Utils.fs" />
-    <Compile Include="Hansei.Rational.fs" />
-  </ItemGroup>
-
-  <ItemGroup>
     <PackageReference Include="MathNet.Numerics" Version="4.8.1" />
     <PackageReference Include="MathNet.Numerics.FSharp" Version="4.8.1" />
   </ItemGroup>
