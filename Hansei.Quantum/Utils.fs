@@ -1,8 +1,7 @@
 ﻿module Hansei.Utils
  
 open Prelude.Common
-open Prelude.Math
-open Hansei.TextUtils        
+open Prelude.Math       
 open MathNet.Symbolics 
 open Hansei.GenericProb
 

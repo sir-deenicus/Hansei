@@ -20,7 +20,6 @@ open MathNet.Numerics
 open MathNet.Symbolics
 open MathNet.Symbolics.Core.Constants 
 open System  
-open Hansei 
 
 module QM = Quantum
  
@@ -39,9 +38,6 @@ cont {
   |> ProbabilitySpace.mapValuesProb Expression.toFloat id
 
 bell "|0>" "|1>" |> QM.exact_reify |> Quantum.histogram id (fun (a,b) -> a <+> b) 20.
-  
-bell "|1>" "|1>" 
-|> filterByObserving (fun x -> true) 
 
 rotateX (pi/3) "|1>" |> Quantum.exact_reify |> QM.histogram2 20. 
 
@@ -49,14 +45,14 @@ rotateX (pi/3) "|1>" |> Quantum.exact_reify
 
 Model.ReifyQuantum(rotateX (pi/3) "|1>")
 
-Model.ReifySymbolic( bernoulli (1/2Q) )
+Model.ReifySymbolic( bernoulli (1/2Q) , 3)
 
 //partial trace or arising of classicality
 cont {
     let! (a,b) = bell "|0>" "|1>"  
     return (a) }
 |> Quantum.exact_reify
-|> measure 
+|> measureReified 
 |> List.map (fun (p,x) -> (Algebraic.simplify true p).ToFormattedString() , x) 
 
 cont {
@@ -82,12 +78,13 @@ cont {
    |> QM.exact_reify
    |> QM.histogram2 20.
     
+
 let random_selectorQ choices = GenericProb.random_selector (MathNet.Symbolics.Complex.magnitude >> squared >> Expression.toFloat) (Complex 0Q) choices
 
+//This should return nonsense...and it does
 let rejection_sample_distQ nsamples ch =
     rejection_sample_dist (Complex 1Q) (Expression.FromInt32 >> Complex) random_selectorQ nsamples ch 
  
-
 cont {
   let! a = hadamard "|0>"
   let! b = hadamard a
@@ -98,9 +95,12 @@ cont {
   return (fst e <+> c <+> p)
 }  
   |> rejection_sample_distQ 1000 //QM.exact_reify 
+  |> QM.normalize
   |> List.map (fun (p,x) -> p.Simplify(), x)
-  |> QM.histogram2 20.                    
-    
+  |> QM.histogram2 20.                  
+
+match Infix.parse "10562500/10812500*(sin(π/8))^2 + 10562500/10812500*(cos(π/8))^2" with
+| ParseResult.ParsedExpression  e -> e |> Expression.toFloat
 
 cont {
   let! a = hadamard "|0>"
@@ -114,26 +114,53 @@ cont {
   |> QM.exact_reify 
   |> List.map (fun (p,x) -> p.Simplify(), x)
   |> QM.histogram2 20.  
+     
+let hh() =
+    cont {
+          let! a = hadamard "|0>"
+          let! b = hadamard a
+          let! c,d = bell a b 
+          let! e = bell c d
+          let! p = rotateX (pi/8) (snd e)
+          do! observeState (p="|1>" && d = "|0>")
+          return (fst e <+> c <+> p)
+        } 
+
+hh () |> QM.reify0 |> first_success 90|> Option.map (fun (c,x) -> x, c.Magnitude |> squared |> MathNet.Symbolics.Utils.fmt) // //|> List.map (fun (p,x) -> p.Simplify() |> string, x)  
+hh() |> QM.exact_reify |> List.map (fun (p,x) -> p.Simplify() |> string, x) 
+
+Model.ReifyQuantum(
+    cont {
+      let! a = hadamard "|0>"
+      let! b = hadamard a
+      let! c,d = bell a b 
+      let! e = bell c d
+      let! p = rotateX (pi/8) (snd e)
+      do! observeState (p="|1>" && d = "|0>")
+      return (fst e <+> c <+> p)
+    }, 6)
+      |> List.map (fun (p,x) -> p.Simplify() |> string, x)  
 
 let q2 = 
   cont {
-    let! a = hadamard "|0>"
+    let! a = hadamard "|0>" 
     let! b = hadamard a
-    return (a,b)
+    return (a,b) //does this make sense?
   } |> QM.exact_reify 
        
-q2 |> QM.histogram2 20.                  
+q2 |> QM.histogram2 20.     
+
 
 let bstate = 
     bell "|1>" "|1>"                                      
     |> Quantum.exact_reify 
     |> List.map (fun (p, x) -> p.Simplify(), x)
 
-measure bstate |> List.map (fun (p,x) -> Expression.toFloat p, x)
+measureReified bstate |> List.map (fun (p,x) -> Expression.toFloat p, x)
  
 cont {
   let! q = bernoulliChoice (1Q/5Q) (q2,bstate)
-  let! s = categorical (measure q)
+  let! s = categorical (measureReified q)
   return (s)
 } |> exact_reify
   |> normalize
@@ -145,18 +172,15 @@ cont {
    
 
 //////////////// 
-      
-let formatExpr qs = qs |> List.map (fun (p:MathNet.Symbolics.Expression,x) -> (MathNet.Symbolics.Trigonometric.simplify p).ToFormattedString(), x) 
-
-let asRational qs = qs |> List.map (fun (p:MathNet.Symbolics.Expression,x) -> Expression.toRational p, x) 
- 
+       
 let T q = phaseShift (pi/4.) q
 
-T "|0>" |> measure2 |> asRational
+T "|0>" |> measure  
 
-rotateZ (pi/8.) "|0>" |> measure2 |> asRational
+rotateZ (pi/8.) "|0>" |> measure |> ProbabilitySpace.mapItemsProb Expression.toRational id
 
-phaseShift (pi/8.) "|1>" 
+phaseShift (pi/8.) "|1>" |> measure
+
 
 let xor a b = (a + b) % 2
 
@@ -182,7 +206,7 @@ let epr b1 b2 =
 cont {
     let! b1 = bernoulli (1Q/2Q)
     let! b2 = bernoulli (1Q/2Q)
-    let! (a,b) = categorical (measure2 (epr b1 b2))
+    let! (a,b) = categorical (measure (epr b1 b2))
     return t(b1 && b2) = xor2 a (bflip b)
 } |> exact_reify
   //|> List.map (fun (p,x) -> Expression.toFloat p , x)
@@ -192,42 +216,64 @@ cont {
 cont {
     let! b1 = bernoulli (1Q/2Q)
     let! b2 = bernoulli (1Q/2Q)
-    let! (a,b) = categorical (measure2 (epr b1 b2))
+    let! (a,b) = categorical (measure (epr b1 b2))
     return t(b1 && b2) = xor2 a (bflip b)
 } |> rejection_sampler 1000
   |> List.map (fun (p,x) -> Expression.toFloat p , x)
   //|> List.map (fun (p,x) -> (Expression.FullerSimplify p).ToFormattedString(), x)
-
-let ns = 1Q/4Q - cos(π/2Q)/4Q
-
-
-let zs = 4/2*(sin(π/8))**2*(cos(π/8))**2 
-Algebraic.simplify true (cos(pi/4Q))
-
-Trigonometric.simplify ns |> Algebraic.simplify true  
-
+   
 bell "|1>" "|1>" |> filterByObserving (fun (a,_) -> a = "|1>") |> QM.exact_reify |> QM.normalize |> QM.histogram2 20.
 
 bell "|0>" "|0>"|> QM.exact_reify |> QM.histogram2 20.
  
-let person angle q b = measure2 (cont { return! (if b = 1 then rotateX angle q else QM.exactly q) })
+let person angle q b = measure (cont { return! (if b = 1 then rotateX angle q else QM.exactly q) })
+let person2 angle q b = cont { return! (if b = 1 then rotateX angle q else QM.exactly q) }
 
-let alice = person (pi/8)  //|> toFloat
-let bob = person (-pi/8) 
+let alice = person (-pi/8)  //|> toFloat
+let bob = person (pi/8) 
 
-let epr2 = bell "|1>" "|1>"                                  
+let alice2 = person2 (-pi/8)  //|> toFloat
+let bob2 = person2 (pi/8) 
+
+let epr2 = bell "|1>" "|1>"   
+
+let epr3 b1 b2 = cont {
+    let! (a,b) = bell "|1>" "|1>" //entangle
+    let! a' = alice2 a b1
+    let! b' = bob2 b b2
+    return (a',b') } 
 
 cont {
    let! b1 = bernoulliChoice (1Q/2Q) (0,1)
    let! b2 = bernoulliChoice (1Q/2Q) (0,1)
   
-   let! (a,b) = categorical (measure2 epr2)
+   let! (a,b) = categorical (measure epr2)
    let! ca = categorical (alice a b1)
    let! cb = categorical (bob b b2) 
                                        
    return b1 &&& b2 = xor2 ca (bflip cb)
 } |> exact_reify 
-      //|> List.map (fun (p,x) -> Expression.toFloat p , x)
-  |> List.map (fun (p,x) -> (  p ).ToFormattedString(), x)
+      |> List.map (fun (p,x) -> Expression.toFloat p , x)
+  //    |> List.map (fun (p,x) -> (Expression.FullerSimplify p).ToFormattedString(), x)
   //|> normalize 
- // |> histogram2 20.
+ // |> histogram2 20. 
+
+cont {
+   let! b1 = bernoulliChoice (1Q/2Q) (0,1)
+   let! b2 = bernoulliChoice (1Q/2Q) (0,1)
+  
+   let! (ca,cb) = categorical (measure (epr3 b1 b2)) 
+                                       
+   return b1 &&& b2 = xor2 ca (bflip cb)
+} |> exact_reify 
+      |> List.map (fun (p,x) -> Expression.toFloat p , x)
+     // |> List.map (fun (p,x) -> (Expression.FullerSimplify p).ToFormattedString(), x)
+
+
+let ns = 1Q/4Q - cos(π/2Q)/4Q
+ 
+let zs = 4/2*(sin(π/8))**2*(cos(π/8))**2 
+
+Algebraic.simplify true (cos(pi/4Q))
+
+Expression.FullerSimplify ns

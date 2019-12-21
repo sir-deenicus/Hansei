@@ -5,13 +5,13 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <None Include="visualprobmonad.fsx" />
     <Compile Include="GenericProb.fs" />
     <Compile Include="Rationals.fs" />
     <Compile Include="SymbolicProb.fs" />
-    <None Include="quantum-test.fsx" />
     <Compile Include="Utils.fs" />
     <Compile Include="Hansei.Quantum.fs" />
+    <None Include="visualprobmonad.fsx" />
+    <None Include="quantum-test.fsx" />
   </ItemGroup>
 
   <ItemGroup>

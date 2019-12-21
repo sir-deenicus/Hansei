@@ -13,12 +13,11 @@
     <Compile Include="Visualization.fs" />
     <Compile Include="Backtracking.fs" />
     <Compile Include="Hansei.Continuations.fs" />
-    <Compile Include="TextUtils.fs" />
     <Compile Include="Utils.fs" />
   </ItemGroup>
 
   <ItemGroup>
-    <PackageReference Include="Prelude" Version="1.0.12" />
+    <PackageReference Include="Prelude" Version="1.0.20" />
   </ItemGroup>
  
 

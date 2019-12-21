@@ -63,14 +63,25 @@ module GenericProb =
 
     let inline limit_reify probMap one n model = explore probMap one (Some n) (reify0 one model)
 
-    let intToExpression = BigRational.FromInt >> Expression.FromRational
-
-    let intToRational = BigRational.FromInt 
-
     let observe test = cont { if not test then return! fail() }
 
     let constrain test = observe test
-    
+
+    let inline first_success maxdepth ch = 
+        let rec loop maxdepth = function
+            | [] -> None
+            | _ when maxdepth = 0 -> None
+            | ((_,Value _) :: _) as l  -> 
+                let choices =
+                    [|for (p, v) in l do 
+                        match v with
+                        | Value x -> yield (p,x)
+                        | _ -> () |] 
+                if choices.Length = 0 then None else Some(Array.sampleOne choices)
+            | (pt,Continued (Lazy t)) :: rest -> (* Unclear: expand and do BFS *)
+                loop (maxdepth - 1) (rest @ List.map (fun (p,v) -> (pt * p,v)) t) 
+        loop maxdepth ch
+
     (* ------------------------------------------------------------------------ *)
     (*	Approximate inference strategies:				    *)
     (*  Trace a few paths from the root to a leaf of the search tree            *)

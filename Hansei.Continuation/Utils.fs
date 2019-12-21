@@ -1,6 +1,5 @@
 ﻿module Hansei.Utils
 
-open Hansei.TextUtils
 open Prelude.Common
 open Prelude.Math
 open System
@@ -11,8 +10,8 @@ open Prelude.Collections
 open Microsoft.Collections.Extensions
 open System.Collections.Generic
 
-
 //////////////////////////////////////
+
 module Samplers =
     let rec sample_beta n a b = 
         if n <= 0 then  (round 2 (a/(a+b)))
@@ -53,10 +52,8 @@ module Samplers =
             if z > -1./c && log u < 0.5 * z**2. + d - dv + d * log v then round 1 dv 
             else loop()
         loop ()
-////////////////////////////
 
-/////////////////////
-
+////////////////////////////////////// 
 //let insertWith fn key item m =
 //    let v' = Map.tryPick (fun k' v' -> if key = k' then Some v' else None) m
 //    match v' with
@@ -79,18 +76,36 @@ let inline insertWith2 fn key item (m:MapSlim<_,_>) =
     | ValueSome v' -> m.Set (key, fn item v')  
     | ValueNone -> m.Set(key, item)
     m
-///////////////
+
+//////////////////////////////////////
+
+let inline testPath (paths : Dict<_,_>) x =
+    match paths.tryFind x with
+    | Some -1. -> true, -1.
+    | Some r -> false, r
+    | None -> false, 1.
+
+let rec propagateUp attenuateUp (paths : Dict<_,_>) r =
+    function
+    | _ when r < 0.01 -> ()
+    | [] -> ()
+    | (_ :: path) ->
+        paths.ExpandElseAdd path (fun v ->
+            if v = -1. then v
+            else max 0. (v + v * r)) (1. + r)
+        propagateUp attenuateUp paths (r * attenuateUp) path
  
-let filterWith f data = 
-  let matches = data |> Array.filter f
-  (Array.length matches |> float) / (float data.Length) 
+//////////////////////////////////////
 
 let inline normalize (choices) =
   let sum = List.sumBy fst choices
   List.map (fun (p, v) -> (p/sum, v)) choices
 
+//////////////////////////////////////
 
-//////////
+let filterWith f data = 
+  let matches = data |> Array.filter f
+  (Array.length matches |> float) / (float data.Length) 
 
 let probabilityOf2 m item = 
     match Map.tryFind item m with
@@ -113,11 +128,12 @@ let inline sum p = List.sumBy fst p
 
 let inline filterToSubspace conditional m = Map.filter (fun k _ -> conditional k) m    
 
-
+//////////////////////////////////////
 //=-=-=-=-=-=-=-=-=-=
 //Float specific
 //=-=-=-=-=-=-=-=-=-=
 let histogram len (d:_[]) =
+    let stringr100 n x = string (round n (x * 100.))
     let maxp,_ = Array.maxBy fst d
     Array.map (fun (p:float,x)-> 
           [|sprintf "%A" x ;
@@ -129,6 +145,9 @@ let histogram2 len d =
     d |> Seq.toArray
       |> Array.rev
       |> histogram len
+//////////////////////////////////////
+
+let toBits x = x / log 2. 
 
 let inline coarsenWithGeneric tonumber f samples =  
     Array.groupBy f samples
@@ -143,9 +162,7 @@ let inline mapDistr projectTo m =
     |> Array.map (fun (x,p:float) -> projectTo x,p) 
     |> Array.groupBy fst 
     |> Array.map (fun (x,xs) -> x, Array.sumBy snd xs) 
-    |> Map.ofArray
- ////////////
-let toBits x = x / log 2. 
+    |> Map.ofArray 
 
 let inline log0 x = if x = 0. then 0. else log x 
 

@@ -137,7 +137,9 @@ let shallow_explore3 maxdepth (choices:ProbabilitySpace<_> ) =
 let rec first_success maxdepth = function
   | [] -> [] : ProbabilitySpace<_>
   | _ when maxdepth = 0 -> [] 
-  | ((_,Value _) :: _) as l  -> l
+  | ((_,Value _) :: _) as l  -> 
+    l |> List.groupBy snd 
+      |> List.map (fun (v, ps) -> List.sumBy fst ps, v)
   | (pt,Continued (Lazy t)) :: rest -> (* Unclear: expand and do BFS *)
       first_success (maxdepth - 1) (rest @ List.map (fun (p,v) -> (pt * p,v)) t)
 
@@ -171,21 +173,7 @@ type SearchSpace<'a, 'b> =
     | Thunk of (('a -> ProbabilitySpace<'a>) -> 'b)
     | Reified of ProbabilitySpace<'a>
 
-let inline testPath (paths : Dict<_,_>) x =
-    match paths.tryFind x with
-    | Some -1. -> true, -1.
-    | Some r -> false, r
-    | None -> false, 1.
 
-let rec propagateUp attenuateUp (paths : Dict<_,_>) r =
-    function
-    | _ when r < 0.01 -> ()
-    | [] -> ()
-    | (_ :: path) ->
-        paths.ExpandElseAdd path (fun v ->
-            if v = -1. then v
-            else max 0. (v + v * r)) (1. + r)
-        propagateUp attenuateUp paths (r * attenuateUp) path
 
 //This sampler takes after beam search or even breadth first search
 //when the width is high enough. Suspended/uninvestigated thunks are passed along so that

@@ -22,24 +22,6 @@ let fail () = qstate []
 
 let inline reify0 m = m (fun x -> [(Complex 1Q, Value x)])
 
-//let explore (maxdepth : int option) (choices : QuantumProbabilitySpace<'T>) =
-//  let rec loop (p:Complex) depth down susp answers =
-//    match (down, susp, answers) with
-//    | (_, [], answers) -> answers 
- 
-//    | (_, (pt, Value v) :: rest, (ans, susp)) ->
-//      loop p depth down rest (insertWith (+) v (pt*p) ans, susp)
- 
-//    | (true, (pt,Continued (Lazy t))::rest, answers) ->
-//      let down' = match maxdepth with Some x -> depth < x | None -> true
-//      loop p depth true rest <| loop (pt*p) (depth+1) down' (t) answers
- 
-//    | (down, (pt,c)::rest, (ans,susp)) ->
-//      loop p depth down rest (ans, (pt*p,c)::susp)
-
-//  let (ans, susp) = loop (Complex 1Q) 0 true choices (Map.empty, [])
-//  Map.fold (fun a v p -> (p, Value v)::a) susp ans : QuantumProbabilitySpace<'T>
-
 //===============
 
 let (<+>) a (b:string) = (a + b).Replace(">|", "")
@@ -60,10 +42,11 @@ let explore (maxdepth : int option) (choices : QuantumProbabilitySpace<'T>) =
 let inline exact_reify model   =  explore None     (reify0 model)  
 let inline limit_reify n model =  explore (Some n) (reify0 model)                   
 
-let inline normalize (choices:list<Complex * 'a>) =
+let normalize (choices:list<Complex * 'a>) =
     normalize (List.sumBy(fst >> Complex.magnitude >> squared) >> sqrt) choices
 
 //=-=-=-=-=-=-=-=-=-=
+
 let buildHadamardGate x = 
     if List.sum x <> 1Q then failwith "qubit must be either [1;0] or [0;1]"
     else  Vector x * (1Q/sqrt 2Q) * Matrix [[1Q; 1Q]; [1Q;-1Q]]
@@ -146,14 +129,14 @@ type Model() =
         | None -> exact_reify thunk
         | Some n -> limit_reify n thunk
 
-let measure (choices:list<Complex * _ >) =  
+let measureReified (choices:list<Complex * _ >) =  
     List.map (fun (p, v) -> ((Complex.magnitude p) ** 2, valueExtract v)) choices
 
-let measure2 q = q |> exact_reify |> measure
+let measure q = q |> exact_reify |> measureReified
 
 let histogram fp f len d =
     d
-    |> measure  
+    |> measureReified  
     |> ProbabilitySpace.mapItemsProb fp f
     |> List.rev  
     |> histogram Utils.fmt Expression.toFloat len
