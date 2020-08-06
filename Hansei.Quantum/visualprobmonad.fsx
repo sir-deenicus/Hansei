@@ -3,7 +3,7 @@
 #r @"prelude\1.0.19\lib\net47\Prelude.dll"
 #r @"mathnet.numerics\4.9.0\lib\net40\MathNet.Numerics.dll"
 #I @"C:\Users\cybernetic\Documents\Papers"  
-#load @"disputil.fsx"
+//#load @"disputil.fsx"
 #load @"literate.fsx"  
 #r @"LiterateUtils\LiterateUtils\bin\Release\net47\LiterateUtils.dll"  
 
@@ -146,6 +146,15 @@ let inline bindx maxdepth (dist : VisualDistribution<'item,'number>) (k : 'item 
           Categorical = l 
           Depth = depth}
             
+
+let inline bindy maxdepth (dist : list<'item * 'number>) (k : 'item -> list<'changeditem * 'number>) = 
+        [
+        
+            for (x,p) in dist do   
+                for (y,p2) in k(x) do  
+                    yield (y, p * p2) ]  
+
+
 let fail() = {Categorical = []; Depth = 0; }
 let bernoulliv p = {Categorical = [true,[p];false, [1.- p]]; Depth = 0; }
 let uniformv l = {Categorical = l |> List.map (fun x -> x, [1./float l.Length]) ; Depth = 0}
@@ -248,40 +257,54 @@ let fixlen maxlen s =
     if String.length s > maxlen then s.Replace(",", "\\n").Replace("/", "\\n")
     else s 
 
-let createDagreGraph2Gen maxlen str maxw h
-    (g : SimpleGraph<_>) =
-    let vs =
-        g.Vertices
-        |> Seq.map
-               (fun v ->
-               sprintf "g.setNode(%A, {label:'%s', width:%d, height:%d});" v
-                   (fixlen maxlen v) (min maxw ((String.length v) * 8)) h)
-        |> Strings.joinToStringWith "\n"
-
-    let es =
-        g.Edges
-        |> List.mapi
-               (fun i (e1, e2, w) ->
-               sprintf "g.setEdge(%A, %A, {label: %A}, 'e%d')" e1 e2 (str w) i)
-        |> Strings.joinToStringWith "\n"
-
-    vs, es  
-
-let createDagreGraph2 str maxw h = createDagreGraph2Gen maxw str maxw h
 
 
 let template = System.IO.File.ReadAllText("C:\Users\cybernetic\Documents\Papers\dagre-template.txt")
 
-let disp isleftright svgid w h (vs,es) =
-    let rankdir = if isleftright then """rankdir: "LR",""" else ""
-    template
-        .Replace("__EDGES_HERE__", es)
-        .Replace("__NODES_HERE__",vs)
-        .Replace("svgid", svgid)
-        .Replace("svgwidth", string w)
-        .Replace("svgheight", string h)
-        .Replace("__RANK_DIR__", rankdir)
-         
+
+let tensorProduct alphabet n =
+    let rec iterate product i =
+        seq {
+            for symbol in alphabet do
+                if i = 0 then yield List.rev product
+                else yield! iterate (symbol::product) (i-1)
+        }
+    iterate [] n
+
+let generatePossibilities alphabet n =
+    tensorProduct alphabet n
+    |> Seq.removeDuplicates
+
+let permutations items takeN =
+    generatePossibilities items takeN
+    |> Seq.map List.removeDuplicates
+    |> Seq.filter (fun l -> l.Length = takeN)
+
+let combinations items takeN =
+    permutations items takeN
+    |> Seq.map List.sort
+    |> Seq.removeDuplicates
+
+let combinationsWithRepeats items takeN =
+    generatePossibilities items takeN
+    |> Seq.map List.sort
+    |> Seq.removeDuplicates 
+
+
+generatePossibilities ["A";"B";"B";"B"] 2 = generatePossibilities ["A";"A";"A";"B"] 2
+
+tensorProduct ["A";"B";"B";"B"] 2
+
+
+combinations ['A'..'Z'] 5 |> Seq.take 30 |> Seq.toArray
+
+
+combinationsWithRepeats ["A";"B"] 2
+
+combinationsWithRepeats ["b"; "c"; "l"; "s"; "v";] 3 
+permutations ["A";"B";"C"; "D"] 2 //|> List.length
+combinations ["A";"B";"A";"B"] 2 //|> List.length
+
 let bn =
     distv 
         {   let! b = bernoulliChoicev "H" "T" 0.5  
