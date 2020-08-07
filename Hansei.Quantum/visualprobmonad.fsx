@@ -1,6 +1,6 @@
 ﻿#r "netstandard"
 #I @"C:\Users\cybernetic\.nuget\packages\"
-#r @"prelude\1.0.19\lib\net47\Prelude.dll"
+#r @"C:\Users\cybernetic\source\repos\Prelude\Prelude\bin\Release\net47\Prelude.dll"
 #r @"mathnet.numerics\4.9.0\lib\net40\MathNet.Numerics.dll"
 #I @"C:\Users\cybernetic\Documents\Papers"  
 //#load @"disputil.fsx"
@@ -145,38 +145,246 @@ let inline bindx maxdepth (dist : VisualDistribution<'item,'number>) (k : 'item 
     {  
           Categorical = l 
           Depth = depth}
-            
 
-let inline bindy maxdepth (dist : list<'item * 'number>) (k : 'item -> list<'changeditem * 'number>) = 
-        [
-        
-            for (x,p) in dist do   
-                for (y,p2) in k(x) do  
-                    yield (y, p * p2) ]  
+(**Non-determism, Combinatorics, Learning, Probability and Quantum Mechanics*)
+(*Coin flips*)
+let generatePossibilities alphabet n = 
+    let rec iterate product i = seq { 
+        if i = 0 then yield List.rev product
+        else
+            for symbol in alphabet do
+                yield! iterate (symbol::product) (i-1)
+        }
+    iterate [] n
+
+[|for c1 in ["H";"T"] do for c2 in ["H";"T"] -> c1,c2|]
+
+let powerset (items : _ []) =
+    let n = items.Length
+    seq {
+        for bitpattern in generatePossibilities [ false; true ] n do
+            yield [| for i in 0..n - 1 do
+                        if bitpattern.[i] then yield items.[i] |]
+    }
+
+let powerset2 n (items : _ seq) =
+    seq {
+        for bitpattern in generatePossibilities [ false; true ] n do
+            yield [| for i in 0..n - 1 do
+                        if bitpattern.[i] then
+                            yield Seq.head (Seq.skip i items) |]
+    }
+
+powerset [|"A";"B";"C";"D";"E"|] |> powerset2 (int(2. ** 5.)) |> Seq.take 100 |> Seq.toArray
+2. ** (2. ** 5.)
+Seq.initInfinite id |> Seq.length
+
+Seq.skip 1 [|1..10|]
+powerset [|1..15|] |> Seq.take 100 |> Seq.toArray
+generatePossibilities [false;true] 20 |> Seq.take 200 |> Seq.toArray
+
+2. ** 30.
+
+generatePossibilities ["H";"T"] 3 |> Seq.toArray// |> Array.length
+generatePossibilities [1..6] 2 |> Seq.toArray |> Array.map List.sum
+//let generatePossibilities alphabet n =
+//    tensorProduct alphabet n
+//    |> Seq.removeDuplicates
+ 
+
+let permutations items takeN =
+    generatePossibilities items takeN
+    |> Seq.map List.removeDuplicates
+    |> Seq.filter (fun l -> l.Length = takeN)
+
+permutations ["A";"B"; "C";"D"] 2// |> Seq.length
+
+let combinations items takeN =
+    permutations items takeN
+    |> Seq.map List.sort
+    |> Seq.removeDuplicates
+
+let combinationsWithRepeats items takeN =
+    generatePossibilities items takeN
+    |> Seq.map List.sort
+    |> Seq.removeDuplicates 
 
 
-let fail() = {Categorical = []; Depth = 0; }
-let bernoulliv p = {Categorical = [true,[p];false, [1.- p]]; Depth = 0; }
-let uniformv l = {Categorical = l |> List.map (fun x -> x, [1./float l.Length]) ; Depth = 0}
-let bernoulliChoicev a b p = {Categorical = [a,[p];b, [1.- p]]; Depth = 0; }
-let alwaysv x = {Categorical = [x,[1.]]; Depth = 0;}
+generatePossibilities ["A";"B";"B";"B"] 2 = generatePossibilities ["A";"A";"A";"B"] 2
+
+tensorProduct ["A";"B";"B";"B"] 2
+
+
+combinations ['A'..'Z'] 5 |> Seq.take 30 |> Seq.toArray
+
+
+combinationsWithRepeats ["A";"B"] 2
+
+combinationsWithRepeats ["b"; "c"; "l"; "s"; "v";] 3 
+permutations ["A";"B";"C"; "D"] 2 //|> List.length
+combinations ["A";"B";"A";"B"] 2 //|> List.length
+
+(**A simple wrapper around the list monad can do some book-keeping of probabilities for us by silently tracking/propagating joint probabilities*)
+module SimplestWrapper =
+    let inline bind (dist : list<'item * 'number>)
+               (k : 'item -> list<'changeditem * 'number>) =
+        [ for (x, p) in dist do
+              for (y, p2) in k x do
+                  yield (y, p * p2) ]
+                   
+    let fail() = []
+    let bernoulli p = [true, p; false, 1.- p] 
+    let uniform l = l |> List.map (fun x -> x, 1./float l.Length) 
+    let bernoulliChoice a b p = [a,p;b,1.- p]
+    let always x = [x,1.] 
      
-type DistributionBuilderV(?maxdepth) =  
-    member inline d.Bind(dist, f) = bindx maxdepth dist f 
-    member d.Return v = alwaysv v
-    member d.ReturnFrom vs = vs
-    member d.Zero () = alwaysv ()
+    type DistributionBuilder() =  
+        member inline d.Bind(dist, f) = bind dist f 
+        member d.Return v = always v
+        member d.ReturnFrom vs = vs
+        member d.Zero () = always ()
+        
+    let dist = DistributionBuilder()
 
-let distvb maxdepth = DistributionBuilderV(maxdepth)
-let distv = DistributionBuilderV()
+    let observe test = dist {if not test then return! fail()}
 
-let observe test = distv {if not test then return! fail()}
+open SimplestWrapper  
+
+dist {  
+    let! b = bernoulliChoice "H" "T" 0.5  
+    let! b2 = bernoulliChoice "H" "T" 0.5    
+    return (b,b2) 
+}
+         
+dist {
+    let! b = bernoulliChoice "H" "T" 0.5
+    let! b2 = bernoulliChoice "H" "T" 0.5
+    let! b3 = if b2 = "H" then bernoulliChoice "H" "T" 0.25
+                else bernoulliChoice "H" "T" 0.5
+    return (b, b2, b3)
+}
+(**The relationship between control structures for nondetermiism and inference. Monads show up a lot when you want to manage complex control flow using higher order functionas and a simple pipelining design. Nondeterminism is about computations which have multiple possiblities and branching paths. Hence the relation with *)
+(** But what if we want to sample from a very large space? Laziness will be helpful. *)
+dist {
+    let! a = uniform [1..10000]
+    let! b = uniform [1..10000]
+    return (a + b)
+} 
   
+
+module LazySeqWrapper =
+    let inline bind (dist : seq<'item * 'number>)
+               (k : 'item -> seq<'changeditem * 'number>) =
+        seq { for (x, p) in dist do
+                for (y, p2) in k x do
+                    yield (y, p * p2) }
+                   
+    let fail() = Seq.empty
+    let bernoulli p = seq [true, p; false, 1.- p] 
+    let uniform l = l |> Seq.map (fun x -> x, 1./float (Seq.length l)) 
+    let bernoulliChoice a b p = seq [a,p;b,1.- p]
+    let always x = seq [x,1.] 
+     
+    type DistributionBuilder() =  
+        member inline d.Bind(dist, f) = bind dist f 
+        member d.Return v = always v
+        member d.ReturnFrom vs = vs
+        member d.Zero () = always ()
+        member d.Combine(a,b) = Seq.concat [a;b]
+        member __.Delay(f: unit -> seq<_>) = f()
+
+    let dist = DistributionBuilder()
+
+    let observe test = dist {if not test then return! fail()}
+
+open LazySeqWrapper
+
+let qn =
+    dist {
+        let! a = uniform (seq [1..10000])
+        let! b = uniform (seq [1..10000])
+        return (a + b) % 20
+    } |> Seq.take 100 |> Seq.toArray |> Array.groupBy fst |> Array.map (fun (x,ps) -> x, Array.sumBy snd ps)
+
+let rec geom c p =
+    dist {
+            let! b = bernoulli p
+            if b then return c
+            else return! geom (c+1) p
+        } 
+
+dist {
+    let! i = geom 0 0.5
+    do! observe (i> 3)
+    let! j = geom 1 0.6
+    return (i+j)
+} |> Seq.take 1      
+
+geom 0 0.6 |> Seq.take 10  |> Seq.toArray
+
+let rec infiniteFlips p = dist {
+        let! b = bernoulli p
+        return b
+        return! infiniteFlips p
+    }
+
+infiniteFlips 0.001 |> Seq.take 10
+
+dist {
+    let! b = infiniteFlips 0.5 
+    let! j = geom 1 0.6
+    do! observe (not b)
+    return (b, j)
+} |> Seq.take 10      
+
+seq {   for i in 1..10 do
+            for j in Seq.initInfinite id do
+              if i > 5 then yield (i,j) }
+|> Seq.take 1
+
+#r @"bin\Debug\net47\Hansei.Core.dll"
+open Hansei.Backtracking
+
+module BtWrapper =
+    let inline bind (dist : LazyStream<'item * 'number>)
+               (k : 'item -> LazyStream<'changeditem * 'number>) =
+        bt { let! (x, p) = dist 
+             let! (y, p2) = k x 
+             yield (y, p * p2) }
+                   
+    let fail() = Nil
+    let bernoulli p = bt {yield true, p; yield false, 1.- p}
+    let uniform l = l |> Seq.map (fun x -> x, 1./float (Seq.length l)) 
+    let bernoulliChoice a b p = bt {yield a,p; yield b,1.- p}
+    let always x = bt {yield x,1.}
+     
+    type DistributionBuilder() =  
+        member inline d.Bind(dist, f) = bind dist f 
+        member d.Return v = always v
+        member d.ReturnFrom vs = vs
+        member d.Zero () = always ()
+        member d.Combine(a,b) = choice a b
+        member __.Delay(f: unit -> LazyStream<_>) = f()
+
+    let dist = DistributionBuilder()
+
+    let observe test = dist {if not test then return! fail()}
+
+open BtWrapper
+
+let rec infiniteFlips p = dist {
+        let! b = bernoulli p
+        return b
+        return! infiniteFlips p
+    }
+
+infiniteFlips 0.001 |> run (Some 100) |> Seq.take 50 |> Seq.toArray
+
 let bn =
-    distv 
-        {   let! b = bernoulliChoicev "H" "T" 0.5 
+    dist
+        {   let! b = bernoulliChoice "H" "T" 0.5 
             do! observe (b = "H")
-            let! b2 = bernoulliChoicev "H" "T" 0.5  
+            let! b2 = bernoulliChoice "H" "T" 0.5  
             let! b3 = if b2 = "H" then bernoulliChoicev "H" "T" 0.25 else bernoulliChoicev "H" "T" 0.5    
             let! b4 = bernoulliChoicev "H" "T" 0.75
             return [b; "(b=H)"; b2;"_";b4] }
@@ -189,14 +397,6 @@ let bn =
                 let! b4 = bernoulliChoicev "H" "T" 0.75
                 return [b; b2;"_";b4]
             else return []}
-let bn =
-    distv 
-        {   let! b = bernoulliChoicev "H" "T" 0.5 
-            
-            let! b2 = bernoulliChoicev "H" "T" 0.5  
-            let! b3 = if b2 = "H" then bernoulliChoicev "H" "T" 0.25 else bernoulliChoicev "H" "T" 0.5    
-            return [b; b2;b3]
-            }
 
 let bn =
     distv 
@@ -209,13 +409,7 @@ let bn =
             let! b2 = bernoulliChoicev "H" "T" 0.5   
             do! observe (not ( b=b2 && b = "H"))
             return [b;b2;"b=b2 && b = H"] }
-
-let bn =
-    distv 
-        {   let! b = bernoulliChoicev "H" "T" 0.5  
-            let! b2 = bernoulliChoicev "H" "T" 0.5    
-            return [b;b2 ] }
-            
+             
 
 
 
@@ -261,49 +455,6 @@ let fixlen maxlen s =
 
 let template = System.IO.File.ReadAllText("C:\Users\cybernetic\Documents\Papers\dagre-template.txt")
 
-
-let tensorProduct alphabet n =
-    let rec iterate product i =
-        seq {
-            for symbol in alphabet do
-                if i = 0 then yield List.rev product
-                else yield! iterate (symbol::product) (i-1)
-        }
-    iterate [] n
-
-let generatePossibilities alphabet n =
-    tensorProduct alphabet n
-    |> Seq.removeDuplicates
-
-let permutations items takeN =
-    generatePossibilities items takeN
-    |> Seq.map List.removeDuplicates
-    |> Seq.filter (fun l -> l.Length = takeN)
-
-let combinations items takeN =
-    permutations items takeN
-    |> Seq.map List.sort
-    |> Seq.removeDuplicates
-
-let combinationsWithRepeats items takeN =
-    generatePossibilities items takeN
-    |> Seq.map List.sort
-    |> Seq.removeDuplicates 
-
-
-generatePossibilities ["A";"B";"B";"B"] 2 = generatePossibilities ["A";"A";"A";"B"] 2
-
-tensorProduct ["A";"B";"B";"B"] 2
-
-
-combinations ['A'..'Z'] 5 |> Seq.take 30 |> Seq.toArray
-
-
-combinationsWithRepeats ["A";"B"] 2
-
-combinationsWithRepeats ["b"; "c"; "l"; "s"; "v";] 3 
-permutations ["A";"B";"C"; "D"] 2 //|> List.length
-combinations ["A";"B";"A";"B"] 2 //|> List.length
 
 let bn =
     distv 

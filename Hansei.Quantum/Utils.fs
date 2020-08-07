@@ -5,14 +5,14 @@ open Prelude.Math
 open MathNet.Symbolics 
 open Hansei.GenericProb
 
-module Map =
-  let sumComplex m = Map.fold (fun sum _ x -> sum + x) (Complex 0Q) m
-  let sumf m = Map.fold (fun sum _ x -> sum + x) (0.) m
-  let inline sum zero m = Map.fold (fun sum _ x -> sum + x) (zero) m
-  let squaredSum m = Map.fold (fun sum _ (x:Complex) -> sum + x.Magnitude ** 2) 0Q m  
-  let normalize (m : Map<'a,_>) = 
-      let total = sqrt (squaredSum m)
-      Map.map (fun _ v -> v / total) m
+module Map = 
+    let inline sum zero m = Map.fold (fun sum _ x -> sum + x) (zero) m
+    let sumComplex m = sum (Complex 0Q) m
+    let sumf m = sum 0. m
+    let squaredSum m = Map.fold (fun sum _ (x:Complex) -> sum + x.Magnitude ** 2) 0Q m  
+    //let normalize (m : Map<'a,_>) = 
+    //    let total = sqrt (squaredSum m)
+    //    Map.map (fun _ v -> v / total) m
        
 ////////////////////////////  
 
@@ -21,7 +21,7 @@ let inline histogram tostring tofloat len (d:_ seq) =
     Array.map (fun (p,x)-> 
           [|sprintf "%A" x ;
             tostring p; 
-            String.replicate (int(round 0 (tofloat(p/maxp) * len))) "#" |]) (Seq.toArray d)
+            String.replicate (int(round 0 (tofloat(p/maxp) * len))) "█" |]) (Seq.toArray d)
     |> makeTable "\n" [|"item";"p"; ""|] ""  
     
 ////////////////////////////  
@@ -32,22 +32,17 @@ let inline mkProbabilityMap normalize t =
            | _ -> ()]    
 ////////////////////////////  
 module Symbolic =
+    open Hansei
+
+    let log0 x = if x = 0Q then 0Q else log x
+
     let toBits x = x / log 2Q  
 
-    let probabilityOf filter m = 
-        Map.sum 0Q (Map.filter (fun k _ -> filter k) m) 
+    let probabilityOf filter m = Utils.probabilityOf (Map.sum 0Q) filter m 
 
-    let entropy dist = -(Map.map (fun _ p -> p * log p) dist |> Map.sum 0Q)
+    let entropy dist = Utils.entropy log0 (Map.sum 0Q) dist
 
-    let mutualInformation (joint:Map<_,_>) =
-        joint |> Map.map (fun (x,y) pxy ->
-            let px = probabilityOf (fst >> (=) x) joint
-            let py = probabilityOf (snd >> (=) y) joint  
+    let mutualInformation (joint:Map<_,_>) = Utils.mutualInformation log0 (Map.sum 0Q) joint
 
-            pxy * log(pxy/(px * py))) 
-
-    let kldivergence (pA:Map<_,_>) (pB:Map<_,_>) =
-        pA |> Map.map (fun x p_a ->        
-            let p_b = probabilityOf ((=) x) pB
-            p_a * log(p_a/ p_b))
+    let kldivergence (pA:Map<_,_>) (pB:Map<_,_>) = Utils.kldivergence log0 (Map.sum 0Q) pA pB
          

@@ -2,21 +2,25 @@
 
   <PropertyGroup>
     <TargetFrameworks>net47;netstandard2.0;netcoreapp2.1</TargetFrameworks>
-    <Version>0.3.2.2</Version>
+    <Version>0.3.2.3</Version>
     <Authors>Deen Abiola</Authors>
     <GeneratePackageOnBuild>true</GeneratePackageOnBuild>
   </PropertyGroup>
 
   <ItemGroup>
+    <None Include="importanceSamplerTest.fsx" />
     <None Include="original-sampler.txt" />
     <None Include="history.txt" />
-    <None Include="discretized.fsx" />
     <None Include="marvel.fsx" />
     <Compile Include="Hansei.fs" />
   </ItemGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\Hansei.Continuation\Hansei.Core.fsproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Update="FSharp.Core" Version="4.7.2" />
   </ItemGroup>
 
 </Project>

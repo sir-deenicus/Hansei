@@ -77,7 +77,9 @@ cont {
   return (a)}   
    |> QM.exact_reify
    |> QM.histogram2 20.
-    
+ 
+ 
+let sampler1 ch = best_first_sample_dist None None (Complex 0Q) (Complex 1Q) (MathNet.Symbolics.Complex.magnitude >> squared >> Expression.toFloat) 2. 18 2 10 0. 120 ch
 
 let random_selectorQ choices = GenericProb.random_selector (MathNet.Symbolics.Complex.magnitude >> squared >> Expression.toFloat) (Complex 0Q) choices
 
@@ -94,10 +96,13 @@ cont {
   do! observeState (p="|1>" && d = "|0>")
   return (fst e <+> c <+> p)
 }  
-  |> rejection_sample_distQ 1000 //QM.exact_reify 
-  |> QM.normalize
-  |> List.map (fun (p,x) -> p.Simplify(), x)
-  |> QM.histogram2 20.                  
+  |> sampler1 //rejection_sample_distQ 1000 //QM.exact_reify 
+  //|> QM.normalize
+  //
+   |> fun x -> x.Values
+   |> List.map (fun (p,x) -> p.Simplify() , x)
+   |> measureReified |> List.sumBy fst |> Expression.toFloat
+  //|> QM.histogram2 20.                  
 
 match Infix.parse "10562500/10812500*(sin(π/8))^2 + 10562500/10812500*(cos(π/8))^2" with
 | ParseResult.ParsedExpression  e -> e |> Expression.toFloat
@@ -113,6 +118,7 @@ cont {
 }  
   |> QM.exact_reify 
   |> List.map (fun (p,x) -> p.Simplify(), x)
+  |> measureReified |> List.sumBy fst |> Expression.toFloat
   |> QM.histogram2 20.  
      
 let hh() =

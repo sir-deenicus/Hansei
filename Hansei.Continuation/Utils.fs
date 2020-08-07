@@ -51,8 +51,30 @@ module Samplers =
             let dv = d * v
             if z > -1./c && log u < 0.5 * z**2. + d - dv + d * log v then round 1 dv 
             else loop()
-        loop ()
+        loop () 
+    
+    let sample_exponential roundto lambda = 
+        let u = random.NextDouble()
+        round roundto ((-log u)/lambda) 
 
+
+let sampleN_No_Replacements sampler n items =
+    let rec sampleN_without_replacement i ch =
+        function
+        | _ when i >= n -> ch
+        | [] -> ch
+        | choices ->
+            let choiceIndex = sampler choices
+            let mutable c = -1
+            let mutable found = None
+
+            let rem =
+                [ for x in choices do
+                    c <- c + 1
+                    if c <> choiceIndex then yield x
+                    else found <- Some x ]
+            sampleN_without_replacement (i + 1) ((choiceIndex, found.Value)::ch) rem
+    sampleN_without_replacement 0 [] items
 ////////////////////////////////////// 
 //let insertWith fn key item m =
 //    let v' = Map.tryPick (fun k' v' -> if key = k' then Some v' else None) m
@@ -85,16 +107,18 @@ let inline testPath (paths : Dict<_,_>) x =
     | Some r -> false, r
     | None -> false, 1.
 
-let rec propagateUp attenuateUp (paths : Dict<_,_>) r =
+let rec propagateUp maxWeight isreward (paths : Dict<_, _>) attenuateUp r =
     function
     | _ when r < 0.01 -> ()
     | [] -> ()
     | (_ :: path) ->
         paths.ExpandElseAdd path (fun v ->
-            if v = -1. then v
-            else max 0. (v + v * r)) (1. + r)
-        propagateUp attenuateUp paths (r * attenuateUp) path
- 
+            if v = -1. || v >= maxWeight then v
+            else max 0. (if isreward then v + r
+                         else v * r)) (if isreward then min maxWeight (1. + r)
+                                       else r)
+        propagateUp maxWeight isreward paths attenuateUp (r * attenuateUp) path
+
 //////////////////////////////////////
 
 let inline normalize (choices) =
@@ -106,15 +130,7 @@ let inline normalize (choices) =
 let filterWith f data = 
   let matches = data |> Array.filter f
   (Array.length matches |> float) / (float data.Length) 
-
-let probabilityOf2 m item = 
-    match Map.tryFind item m with
-     | None -> 0.
-     | Some p -> p
-
-let inline probabilityOf filter m = 
-    Map.sum (Map.filter (fun k _ -> filter k) m)
-
+     
 let inline conditionalProbability conditional matchwith m = 
     let sub = Map.filter (fun k _ -> conditional k) m
     let matches = Map.filter (fun k _ -> matchwith k) sub
@@ -138,7 +154,7 @@ let histogram len (d:_[]) =
     Array.map (fun (p:float,x)-> 
           [|sprintf "%A" x ;
             stringr100 2 p + "%"; 
-            String.replicate (int(round 0 (p/maxp * len))) "#" |]) d
+            String.replicate (int(round 0 (p/maxp * len))) "█" |]) d
     |> makeTable "\n" [|"item";"p"; ""|] ""  
 
 let histogram2 len d =
@@ -147,38 +163,36 @@ let histogram2 len d =
       |> histogram len
 //////////////////////////////////////
 
-let toBits x = x / log 2. 
-
 let inline coarsenWithGeneric tonumber f samples =  
-    Array.groupBy f samples
-    |> Array.map (fun (x,xs) -> tonumber xs.Length, x) 
-    |> List.ofArray
-    |> normalize
-
-let coarsenWith f samples = coarsenWithGeneric float f samples
-
-let inline mapDistr projectTo m = 
+    List.groupBy f samples
+    |> List.map (fun (x,xs) -> tonumber xs.Length, x)  
+     
+let inline mapDistribution projectTo m = 
     Map.toArray m 
-    |> Array.map (fun (x,p:float) -> projectTo x,p) 
+    |> Array.map (fun (x,p) -> projectTo x,p) 
     |> Array.groupBy fst 
     |> Array.map (fun (x,xs) -> x, Array.sumBy snd xs) 
     |> Map.ofArray 
+      
+let inline probabilityOf mapsum filter m = 
+    mapsum (Map.filter (fun k _ -> filter k) m)
 
-let inline log0 x = if x = 0. then 0. else log x 
+let inline entropy log0 mapsum dist = -(mapsum(Map.map (fun _ p -> p * log0 p) dist))
 
-let inline entropy dist = -(Map.map (fun _ (ToFloat p) -> p * log0 p) dist |> Map.sum)
-
-let inline mutualInformation (joint:Map<_,_>) =
+let inline mutualInformation log0 mapsum (joint:Map<_,_>) =
     joint |> Map.map (fun (x,y) pxy ->
-        let px = probabilityOf (fst >> (=) x) joint
-        let py = probabilityOf (snd >> (=) y) joint 
-        
-        let fpx,fpy,fpxy = float px, float py, float pxy
+        let px = probabilityOf mapsum (fst >> (=) x) joint
+        let py = probabilityOf mapsum (snd >> (=) y) joint 
+          
+        pxy * log0(pxy/(px * py))) 
 
-        fpxy * log0(fpxy/(fpx * fpy))) 
-
-let inline kldivergence (pA:Map<_,_>) (pB:Map<_,_>) =
+let inline kldivergence log0 mapsum (pA:Map<_,_>) (pB:Map<_,_>) =
     pA |> Map.map (fun x p_a ->        
-        let p_b = probabilityOf ((=) x) pB
-        float p_a * log0(float p_a/ float p_b))
-         
+        let p_b = probabilityOf mapsum ((=) x) pB
+        p_a * log0(p_a/ p_b))
+ 
+ //=========================
+
+let coarsenWith f samples = coarsenWithGeneric float f samples
+
+let toBits x = x / log 2. 

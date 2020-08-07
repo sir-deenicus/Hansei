@@ -1,18 +1,6 @@
-The following are approaches that ended up not being needed or used:
+The following are distribution definitions that ended up not being needed or used:
 
-//=-=-=-=-=-=-=-=-=-=
-module Distributions =                
-  open Hansei.Utils.Rational
-
-  let bernoulli p = distribution [(p, true); (1N-p, false)]
-
-  let bernoulliChoice p (a,b) = distribution [(p, a); (1N-p, b)]
-                                                          
-  let uniform (items:'a list) = 
-      let num = BigRational.FromInt items.Length
-      distribution (List.map (fun item -> 1N/num, item) items)
-
-  let categorical distr = distribution distr 
+module Distributions =  
 
   //=-=-=-=-=-=-=-=-=-=
   
@@ -45,16 +33,192 @@ module Distributions =
   let uniform_float_range low high = cont {
       let! x = uniform_int_range low high
       let r = ceil(log10 (float high))
-      return (float x / 10. ** r) } 
-    
+      return (float x / 10. ** r) }  
 
 
-  let rec dirichlet3 draws a b c = cont {
-      if draws <= 0 then return [|a/(a+b+c);b/(a+b+c);c/(a+b+c)|]
-      else let! ball = categorical [a/(a+b+c),1;b/(a+b+c),2;c/(a+b+c),3]
-           if ball = 1 then return! dirichlet3 (draws - 1) (a+1N) b c
-           elif ball = 2 then return! dirichlet3 (draws - 1) a (b+1N) c
-           else return! dirichlet3 (draws-1) a b (c+1N)
+  ///stepsizing says how precise you want your discrete approximation to be. The larger it is,
+  ///the larger the space that is being dealt with. And the slower sampling will be. And more memory will be used
+  ///Ex: 10 = [0, 0.1..0.1..1] | 20 = [0, 0.05..0.05..1.0] | 100 = [0, 0.01..0.01..1.0]
+  let normal mean scale stepsizing roundto = cont {
+      let! u = uniform_float_range 1 stepsizing 
+      let! v = uniform_float_range 1 stepsizing 
+      let z = sqrt (-2. * log u)  * cos(2. * pi * v)
+      return round roundto (mean + z * scale)
   }
 
-   
+  ///stepsizing says how precise you want your discrete approximation to be. The larger it is,
+  ///the larger the space that is being dealt with. And the slower sampling will be. And more memory will be used
+  ///Ex: 10 = [0, 0.1..0.1..1] | 20 = [0, 0.05..0.05..1.0] | 100 = [0, 0.01..0.01..1.0]
+  ///mu scale correspond to what would be the mean , stdev of normal distribution that you get by taking the log of this functions output
+  let lognormal mu scale stepsizing roundto = cont {
+      let! u = uniform_float_range 1 stepsizing 
+      let! v = uniform_float_range 1 stepsizing 
+      let z = sqrt (-2. * log u)  * cos(2. * pi * v)
+      return round roundto (exp(mu + z * scale))
+  }
+
+  ///upper suggsted < 9999 to avoid a sudden jump in the distribution at 1,
+  ///see uniform_float_range for how upper is transformed.
+  let poisson lambda upper = 
+      let p = exp -lambda
+      let rec loop u s p x =
+          if u <= s then x
+          else let x' = x + 1.
+               let p' = p * lambda/x'
+               loop u (s+p') p' x'
+      cont {
+         let! u = uniform_float_range 0 upper 
+         return (loop u p p 0.)
+      }  
+
+==================
+
+Original function to turn lists simulating a probability monad into a graph. 
+Due to all the manual plumbing regarding aggregation and duplicate paths, it was a chore to use.
+
+let aggregateGen join joinlast sep items =
+    let len = List.length items - 1
+    items
+    |> List.fold (fun (acc, i, builtstr) (s,p) ->
+            let sep = if builtstr = "" then "" else sep
+            let str = if not joinlast && i = len then s else builtstr </join/> sep </join/> s
+            (str,p) :: acc, i + 1, str) ([], 0,"")
+    |> fst3 |> List.rev
+
+let aggregate l = aggregateGen (+) l
+      
+let inline createGraph2 dispjoint str one f problist =
+    let graph = Prelude.SimpleDirectedGraphs.LabeledDirectedGraph()
+    graph.InsertVertex "root" |> ignore
+    problist
+    |> List.map (fun probpath ->
+            probpath
+            |> List.fold (fun (ps, prevnode) (n, p) ->
+                    let ev =
+                        if isNumber n then
+                            sprintf " (EV = %s)" (str (f n * p * ps))
+                        else ""
+                    graph.InsertVertex(n + ev) |> ignore
+                    let prob =
+                        if dispjoint then p * ps
+                        else p 
+                    graph.InsertEdge(prevnode, (n + ev), prob) |> ignore 
+                    p * ps, n + ev) (one, "root"))
+    |> ignore
+    graph
+     
+let inline groupAndSum l =
+    List.groupBy fst l
+    |> List.map (fun (key, ps) -> key, ps |> List.sumBy snd) 
+
+let inline probDist2 one problist =
+    problist
+    |> List.map (fun l ->
+            let xs, ps = l |> List.unzip
+            xs, List.fold ( * ) one ps)
+    |> List.groupBy fst
+    |> List.map (fun (key, ps) -> key, ps |> List.sumBy snd)    
+
+let inline normalize l = 
+    let sum = List.sumBy snd l
+    List.map (fun (x,p) -> x, p / sum) l
+
+let lblfst2 k path =
+    List.mapi (fun i l ->
+        let str =
+            if i = 0 then ""
+            else "_path_" + string (char (k + 97)) + string (i + 1)
+        List.mapi (fun j (s, p) ->
+            if j = List.length l - 1 then s, p
+            else s + str, p) l) path
+
+let lblfst path =
+    List.mapi (fun i l ->
+        let str =
+            if i = 0 then ""
+            else "_path_" + string (i + 1)
+        List.mapi (fun j (s, p) ->
+            if j = List.length l - 1 then s, p
+            else s + str, p) l) path
+
+let altpath paths =
+    paths
+    |> List.groupBy (List.map fst)
+    |> List.collect (snd >> lblfst)
+
+============
+
+
+let shallow_explore2 maxdepth (choices:ProbabilitySpace<_> ) =
+    let add_answer pcontrib v mp = insertWith2 (+) v pcontrib mp 
+    let rec loop pc depth ans acc = function
+    | [] -> (ans,acc)
+    | (p,Value v)::rest -> loop pc depth (add_answer (p * pc) v ans) acc rest
+    | c::rest when depth >= maxdepth -> loop pc depth ans (c::acc) rest
+    | (p,Continued (Lazy t))::rest -> 
+      let (ans,ch) = loop (pc * p) (depth + 1) ans [] (t) 
+      let ptotal = List.fold (fun pa (p,_) -> pa + p) 0.0 ch 
+      let acc =
+        if ptotal = 0.0 then acc
+        else if ptotal < nearly_one then
+             (p * ptotal, 
+              let ch = List.map (fun (p,x) -> (p / ptotal,x)) ch          
+              Continued (lazy ch))::acc
+            else (p, Continued (lazy ch))::acc 
+      loop pc depth ans acc rest
+    
+    let (ans,susp) = loop 1.0 0 (CollectionSlim.MapSlim()) [] choices
+    [ yield! susp
+      for i in 0..ans.Count - 1 -> 
+        let v, p = ans.[i] 
+        p, Value v] : ProbabilitySpace<_>
+
+
+let sample_dist2 maxdepth (selector) (sample_runner) (ch:ProbabilitySpace<_>) =
+    let look_ahead pcontrib (ans,acc) = function (* explore the branch a bit *)
+    | (p,Value v) -> (insertWith2 (+) v (p * pcontrib) ans, acc)
+    | (p,Continued (Lazy t)) -> 
+        match (t)  with
+        | [] -> (ans,(acc:(float * ProbabilitySpace<_>) list))
+        | [(p1,Value v)] -> 
+           (insertWith2 (+) v (p * p1 * pcontrib) ans, acc)
+        | ch ->
+            let ptotal = List.fold (fun pa (p,_) -> pa + p) 0.0 ch 
+            (ans,
+              if ptotal < nearly_one then
+                (p * ptotal, List.map (fun (p,x) -> (p / ptotal,x)) ch)::acc 
+              else (p, ch)::acc)        
+    let rec loop depth pcontrib ans = function
+    | [(p,Value v)]  -> insertWith2 (+) v (p * pcontrib) ans
+    | []         -> ans
+    | [(p,Continued (Lazy th))] -> loop (depth+1) (p * pcontrib) ans (th)
+    | ch when depth < maxdepth -> (* choosing one thread randomly *)    
+        match List.fold (look_ahead pcontrib) (ans,[]) ch with
+        | (ans,[]) -> ans
+        | (ans,cch) ->
+           let (ptotal,th:ProbabilitySpace<_>) = selector cch 
+           loop (depth+1) (pcontrib * ptotal) ans th  
+    | _ -> ans    
+    let toploop pcontrib ans cch = (* cch are already pre-explored *)
+        let (ptotal,th) = selector cch 
+        loop 0 (pcontrib * ptotal) ans th 
+    let driver pcontrib (vals:CollectionSlim.MapSlim<_,_>) cch =
+        let (ans:CollectionSlim.MapSlim<_,_>,nsamples) = 
+             sample_runner (CollectionSlim.MapSlim()) (fun ans -> toploop pcontrib ans cch)  
+        let ns = float nsamples  
+        //let ans = Map.fold (fun ans v p  -> insertWith (+) v (ns * p) ans) ans vals 
+        for i in 0..vals.Count - 1 do 
+            let v, p = vals.[i]
+            insertWith2 (+) v (ns * p) ans |> ignore
+        printfn "sample_importance: done %d worlds\n" nsamples;
+        //Map.fold (fun a v p -> (p / ns,Value v)::a) [] ans       
+        [for i in 0..ans.Count - 1 -> let v, p = ans.[i] in p/ns, Value v]
+    let rec make_threads depth pcontrib ans ch =  (* pre-explore initial threads *)
+        match List.fold (look_ahead pcontrib) (ans,[]) ch with
+        | (ans,[]) -> (* pre-exploration solved the problem *) 
+          [for i in 0..ans.Count - 1 -> let v, p = ans.[i] in p, Value v]
+        | (ans,[(p,ch)]) when depth < maxdepth -> (* only one choice, make more *)
+           make_threads (depth+1) (pcontrib * p) ans ch
+          (* List.rev is for literal compatibility with an earlier version *)
+        | (ans,cch) -> driver pcontrib ans (List.rev cch) 
+    make_threads 0 1.0 (CollectionSlim.MapSlim()) ch : ProbabilitySpace<_> 

@@ -7,6 +7,7 @@ open MathNet.Symbolics.LinearAlgebra
 open MathNet.Symbolics
 open MathNet.Symbolics.Core
 open Prelude.Math
+open MathNet.Symbolics.NumberTheory
 
 //Core of Hansei modified from base:
 //https://gist.github.com/einblicker/3245547#file-hansei
@@ -139,7 +140,7 @@ let histogram fp f len d =
     |> measureReified  
     |> ProbabilitySpace.mapItemsProb fp f
     |> List.rev  
-    |> histogram Utils.fmt Expression.toFloat len
+    |> histogram Utils.fmt (Expression.toFloat >> Option.get) len
 
 let histogram2 len d = histogram id id len d  
 

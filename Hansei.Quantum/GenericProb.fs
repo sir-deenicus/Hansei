@@ -8,11 +8,17 @@ module GenericProb =
     open Prelude.Common
     open MathNet.Numerics 
     open Prelude.Math
-
+     
     type GenericProbabilitySpace<'a, 'T> = list<'a * GenericWeightedTree<'a, 'T>>
     and GenericWeightedTree<'a, 'T> = 
         | Value of 'T 
         | Continued of Lazy<GenericProbabilitySpace<'a, 'T>>    
+
+    
+    type ProbSearchResult<'W,'T> =
+        {Values : GenericProbabilitySpace<'W,'T>
+         Continuation : GenericProbabilitySpace<'W,'T>
+         Paths : Dict<int32 list, float>}
 
     let valueExtract = function Value x -> x
 
@@ -33,7 +39,19 @@ module GenericProb =
 
     let distribution ch k = List.map (fun (p:'a,v) -> (p, Continued(lazy(k v)))) ch
 
-    let fail () = distribution []
+    let fail () = distribution [] 
+    
+    let observe test = cont { if not test then return! fail() }
+
+    let constrain test = observe test
+
+    let softConstrainOn r = cont { if random.NextDouble() > r then return! fail() }
+
+    let filterDistribution f p = cont {
+        let! x = p
+        do! observe (f x)
+        return x
+    }   
 
     let inline reify0 one m = m (fun x -> [(one , Value x)])
 
@@ -58,15 +76,11 @@ module GenericProb =
         let (ans, susp) = loop one 0 true choices (Dict(), [])
         [ yield! susp
           for (KeyValue(v, p)) in ans -> probMap p, Value v ] : GenericProbabilitySpace<_, _> 
-
+    
     let inline exact_reify probMap one model = explore probMap one None (reify0 one model)
 
     let inline limit_reify probMap one n model = explore probMap one (Some n) (reify0 one model)
-
-    let observe test = cont { if not test then return! fail() }
-
-    let constrain test = observe test
-
+     
     let inline first_success maxdepth ch = 
         let rec loop maxdepth = function
             | [] -> None
@@ -82,6 +96,94 @@ module GenericProb =
                 loop (maxdepth - 1) (rest @ List.map (fun (p,v) -> (pt * p,v)) t) 
         loop maxdepth ch
 
+    //This sampler takes after beam search or even breadth first search
+    //when the width is high enough.
+    let inline best_first_sample_dist (maxtime : _ option) prevtabu 
+        zero one tofloat maxwidth maxdepthval width lookaheadWidth 
+        maxTemperature niters space =
+
+        let t0 = System.DateTime.Now
+        let paths = defaultArg prevtabu (Dict<int32 list, float>())
+        let maxbeamdepth = int (log maxwidth / log (float width))
+        let gainT = maxTemperature ** (1./200.)
+        let gainLiteT = maxTemperature ** (1./300.)
+        let attenT = maxTemperature ** (-1./10.)
+        let useTemperature = maxTemperature > 1. 
+        let mutable T = 1.
+        let maxdepth = if maxdepthval % 2 = 0 then maxdepthval + 1 else maxdepthval  
+        let discreteSampler ps =  
+            Stats.discreteSample (Array.normalize [|for (p,w,_) in ps -> (tofloat p * w) ** (1./T)|])
+        let empty = Dict()
+        let fch curpath ch =
+            ch
+            |> List.mapi (fun i (p, t) ->
+                    let pass, w = testPath paths (i :: curpath)
+                    if pass then zero, 0., t
+                    else p, w, t)
+        let rec loop (curpath : int32 list) maxd depth lookahead pcontrib ans =
+            function
+            | [] -> //FIX PRP{AGATE
+                propagateUp 1. false paths 0.5 -0.1 curpath
+                paths.ExpandElseAdd curpath (fun _ -> -1.) -1.
+                if useTemperature then T <- min maxTemperature (T * gainT)
+                empty  
+            | ([ p, Value v ] : GenericProbabilitySpace<'W, 'T>) ->
+                propagateUp  1. true paths 0.5 0.1 curpath
+                paths.ExpandElseAdd curpath (fun _ -> -1.) -1.
+                if useTemperature then T <- max 1. (T * attenT)
+                Utils.insertWithx (+) v (p * pcontrib) ans
+            | _ when depth > maxdepth
+                        || (maxtime.IsSome
+                            && (DateTime.Now - t0).TotalSeconds > maxtime.Value) -> 
+                if lookahead then
+                    propagateUp 1. false paths 0.5 -0.01 curpath
+                if useTemperature then T <- min maxTemperature (T * gainLiteT)
+                empty
+            | [ p, Continued(Lazy th) ] ->
+                if lookahead then
+                    propagateUp 1. true paths 0.5 -0.01 curpath
+                    empty
+                else loop curpath maxd (depth + 1) false (p * pcontrib) ans th
+            | ch when not lookahead ->              
+                let bwidth =
+                    if depth > maxbeamdepth then 1
+                    else width 
+              
+                let widths, lookahead, steps = 
+                    if lookaheadWidth = 0 then [|bwidth|], [|false|], 0
+                    else
+                        [|lookaheadWidth;bwidth|], [|true; false|], 1
+
+                let selected =
+                    [ for i in 0..steps do 
+                        let choices =
+                            sampleN_No_Replacements discreteSampler widths.[i] (fch curpath ch)
+                        yield! [ for (b, (p, _, t)) in choices do
+                                    if p <> zero then
+                                        yield loop (b :: curpath) maxd (depth + 1)
+                                                lookahead.[i] (pcontrib) ans [ p, t ] ] ]
+
+                for samples in selected do
+                    ans.MergeWith (fun _ t -> t) (Seq.toArray samples) 
+                ans
+            | _ -> empty
+
+        let rec sampler (ch : GenericProbabilitySpace<'W, 'T>) ans =
+            function
+            | 0 ->
+                let t1 = System.DateTime.Now
+                printfn "done %d worlds\nTime taken: %A seconds" niters
+                    (round 3 ((t1 - t0).TotalSeconds))
+                { Values = 
+                    [ for (KeyValue(v, p:'W)) in ans -> p, Value v ]; 
+                  Continuation = ch; 
+                  Paths = paths}
+            | n ->
+                let ans = loop [] maxdepth 0 false one ans ch
+                sampler ch ans (n - 1)  
+
+        sampler (reify0 one space) (Dict()) niters 
+    
     (* ------------------------------------------------------------------------ *)
     (*	Approximate inference strategies:				    *)
     (*  Trace a few paths from the root to a leaf of the search tree            *)
@@ -101,25 +203,26 @@ module GenericProb =
         fun choices ->
             let ptotal = List.sumBy fst choices  
             let r = random.NextDouble (0., tofloat ptotal)      (* 0<=r<ptotal *)
-            selection r ptotal zero choices
-
-    let inline rejection_sample_dist one fromInt selector nsamples ch : GenericProbabilitySpace<_, _> =    
-        let t0 = System.DateTime.Now 
+            selection r ptotal zero choices 
+    
+    let inline rejection_sample_dist one fromInt selector nsamples ch : GenericProbabilitySpace<_, _> =
+        let t0 = System.DateTime.Now
         let rec loop pcontrib ans = function
-            | [(p,Value v)]  -> insertWith (+) v (p * pcontrib) ans
+            | [(p,Value v)]  -> insertWithx (+) v (p * pcontrib) ans
             | []         -> ans
             | [(p,Continued (Lazy th))] -> loop (p * pcontrib) ans (th)
             | ch ->
-                let (ptotal,th) = selector ch 
-                loop (pcontrib * ptotal) ans [(one,th)]  
+                let (ptotal,th) = selector ch
+                loop (pcontrib * ptotal) ans [(one,th)]
         let rec driver ch ans = function
-            | 0 -> let ns = fromInt nsamples 
+            | 0 -> let ns = fromInt nsamples
                    let t1 = System.DateTime.Now
-                   printfn "rejection_sample: done %d worlds\nTime taken: %A seconds" 
+                   printfn "rejection_sample: done %d worlds\nTime taken: %A seconds"
                             nsamples (round 3 ((t1 - t0).TotalSeconds))
-                   Map.fold (fun a v p -> (p / ns,Value v)::a) [] ans  
-            | n -> driver ch (loop one ans ch) (n-1) 
-        driver (reify0 one ch) Map.empty nsamples 
+                   [for KeyValue(v,p) in ans -> p / ns, Value v] 
+            | n -> driver ch (loop one ans ch) (n-1)
+        driver (reify0 one ch) (Dict()) nsamples 
+
          
     type ModelFrom<'w, 'a, 'b>
         (reify0, explore : int option -> GenericProbabilitySpace<'w,'a> -> GenericProbabilitySpace<_,_>, 
@@ -207,13 +310,12 @@ module GenericProb =
                     return! loop (draws - 1) d' }
             loop draws d
 
-module Visualization =
-    open Hansei.Visualization
+module Visualization = 
     open MathNet.Symbolics
     open MathNet.Symbolics.Core
 
-    let createGraphSymb joint = createGraph2 joint Expression.toFormattedString 1Q (fun s -> Expression.fromFloat (float s))
-    let createGraphSymbQ joint = createGraph2 joint (fun c ->  c.ToString()) (Complex 1Q) (fun s -> Complex (Expression.fromFloat (float s)))
+    //let createGraphSymb joint = createGraph2 joint Expression.toFormattedString 1Q (fun s -> Expression.fromFloat (float s))
+    //let createGraphSymbQ joint = createGraph2 joint (fun c ->  c.ToString()) (Complex 1Q) (fun s -> Complex (Expression.fromFloat (float s)))
  
     module Symbolic =
         let bernoulliChoice p (a,b) = [a, p; b, 1Q - p]
@@ -229,6 +331,8 @@ module Visualization =
             List.map (fun (x,_) -> x, 1Q/len) l
 
     module Interval = 
+        open MathNet.Symbolics.Utils
+
         let bernoulliChoice (l,r) (a,b) = 
             let p = interval l r
             [a, p ; b, 1. - p]
