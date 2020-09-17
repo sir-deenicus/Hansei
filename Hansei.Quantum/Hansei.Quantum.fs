@@ -8,6 +8,7 @@ open MathNet.Symbolics
 open MathNet.Symbolics.Core
 open Prelude.Math
 open MathNet.Symbolics.NumberTheory
+open Prelude.Common
 
 //Core of Hansei modified from base:
 //https://gist.github.com/einblicker/3245547#file-hansei

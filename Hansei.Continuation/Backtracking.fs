@@ -9,7 +9,7 @@ type LazyStream<'a> =
     | One of 'a //one element
     | Choice of 'a * LazyStream<'a> //one element, and maybe more
     | Thunk of Lazy<LazyStream<'a>> //suspended stream
-
+      
 let rec choice r r' =
     match r with
     | Nil -> r' //first empty-> try the second
@@ -37,8 +37,15 @@ type FairStream() =
     member __.Zero() = Nil
     member __.Combine(r, r') = choice r r'
     member __.Delay(f: unit -> LazyStream<_>) = Thunk(Lazy.Create f)
+    member __.MergeSources(xs, ys) = choice xs ys 
 
 let bt = FairStream()
+
+module FairStream =
+    let map f xs = bt {
+        let! x = xs
+        return f x
+    }
 
 let rec run depth stream =
     match (depth, stream) with
@@ -47,7 +54,6 @@ let rec run depth stream =
     | _, Choice (a, r) -> seq { yield a; yield! run depth r }
     | 0, Thunk _ -> Seq.empty //exhausted depth
     | d, Thunk (Lazy r) -> run (d - 1) r
-    | _ -> Seq.empty
 
 let guard assertion = bt { if assertion then return () }
  

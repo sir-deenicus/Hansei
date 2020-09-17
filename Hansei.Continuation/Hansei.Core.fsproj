@@ -10,6 +10,7 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <Compile Include="Combinatorics.fs" />
     <Compile Include="Backtracking.fs" />
     <Compile Include="Hansei.Continuations.fs" />
     <Compile Include="Utils.fs" />

@@ -285,7 +285,7 @@ module GenericProb =
 
         let inline discretizedSampler numbertype coarsener sampler (n: int) =
             cont {
-                return! categorical ([| for _ in 1 .. n -> sampler() |]   |> coarsenWithGeneric numbertype coarsener)
+                return! categorical ([ for _ in 1 .. n -> sampler() ] |> coarsenWithGeneric numbertype coarsener)
             }
 
         let inline beta one draws a b = 
