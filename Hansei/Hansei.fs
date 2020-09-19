@@ -62,7 +62,30 @@ let inline reify0 m = m (fun x -> [(1.0, Value x)] : ProbabilitySpace<_>)
 
 let exactly x = distribution [1., x] 
 
-let explore (maxdepth : int option) (choices : ProbabilitySpace<'T>) =
+let explore (maxdepth: int option) (choices: ProbabilitySpace<'T>) =
+    let rec loop p depth down susp answers =
+        match (down, susp, answers) with
+        | (_, [], answers) -> answers
+        | (_, (pt, Value v) :: rest, (ans, susp)) -> 
+            loop p depth down rest (insertWithx (+) v (pt * p) ans, susp) 
+        | (true, (pt, Continued (Lazy t)) :: rest, answers) ->
+            let down' =
+                match maxdepth with
+                | Some x -> depth < x
+                | None -> true
+            loop p depth true rest
+            <| loop (pt * p) (depth + 1) down' (t) answers
+
+        | (down, (pt, c) :: rest, (ans, susp)) -> loop p depth down rest (ans, (pt * p, c) :: susp)
+
+    //let (ans, susp) = loop 1.0 0 true choices (Map.empty, [])
+    let (ans, susp) = loop 1.0 0 true choices (Dict(), [])
+
+    //Map.fold (fun a v p -> (p, Value v)::a) susp ans : ProbabilitySpace<'T>
+    [ yield! susp
+      for (KeyValue (v, p)) in ans -> p, Value v ]: ProbabilitySpace<_>   
+      
+let exploreb (maxdepth : int option) (choices : ProbabilitySpace<'T>) =
   let rec loop p depth down susp answers =
     match (down, susp, answers) with
     | (_, [], answers) -> answers 
@@ -89,27 +112,34 @@ let nearly_one = 1.0 - 1e-7;
    perform exact inference to the given depth
    We still pick out all the produced answers and note the failures. *)
      
-let shallow_explore maxdepth (choices:ProbabilitySpace<_> ) =
-    let add_answer pcontrib v mp = insertWithx (+) v pcontrib mp 
-    let rec loop pc depth ans acc = function
-    | [] -> (ans,acc)
-    | (p,Value v)::rest -> loop pc depth (add_answer (p * pc) v ans) acc rest
-    | c::rest when depth >= maxdepth -> loop pc depth ans (c::acc) rest
-    | (p,Continued (Lazy t))::rest -> 
-      let (ans,ch) = loop (pc * p) (depth + 1) ans [] (t) 
-      let ptotal = List.fold (fun pa (p,_) -> pa + p) 0.0 ch 
-      let acc =
-        if ptotal = 0.0 then acc
-        else if ptotal < nearly_one then
-             (p * ptotal, 
-              let ch = List.map (fun (p,x) -> (p / ptotal,x)) ch          
-              Continued (lazy ch))::acc
-            else (p, Continued (lazy ch))::acc 
-      loop pc depth ans acc rest
-    
-    let (ans,susp) = loop 1.0 0 (Dict()) [] choices
+let shallow_explore maxdepth (choices : ProbabilitySpace<_>) =
+    let add_answer pcontrib v mp = insertWithx (+) v pcontrib mp
+
+    let rec loop pc depth ans acc =
+        function
+        | [] -> (ans, acc)
+        | _ when maxdepth = -1 -> (ans, acc)
+        | (p, Value v) :: rest ->
+            loop pc depth (add_answer (p * pc) v ans) acc rest
+        | c :: rest when depth >= maxdepth -> loop pc depth ans (c :: acc) rest
+        | (p, Continued(Lazy t)) :: rest ->
+            let (ans, ch) = loop (pc * p) (depth + 1) ans [] t
+            let ptotal = List.fold (fun pa (p, _) -> pa + p) 0.0 ch
+
+            let acc =
+                if ptotal = 0.0 then acc
+                else if ptotal < nearly_one then
+                    (p * ptotal,
+                     let ch = List.map (fun (p, x) -> (p / ptotal, x)) ch
+                     Continued(lazy ch))
+                    :: acc
+                else (p, Continued(lazy ch)) :: acc
+            loop pc depth ans acc rest
+
+    let (ans, susp) = loop 1.0 0 (Dict()) [] choices
     [ yield! susp
-      for (KeyValue(v,p)) in ans -> p, Value v] : ProbabilitySpace<_>
+      for (KeyValue(v, p)) in ans -> p, Value v ] : ProbabilitySpace<_>
+
 
 (* Explore the tree till we find the first success -- the first leaf
    (V v) -- and return the resulting tree. If the tree turns out to
