@@ -171,6 +171,8 @@ module LazyList =
 
     let isEmpty (s : LazyList<'T>) = s.IsEmpty
 
+    let singleton x = cons x empty
+
     let rec take n s =
       lzy(fun () ->
         if n < 0 then invalidArg "n" "the number must not be negative"
@@ -279,7 +281,9 @@ module LazyList =
     let ofSeq (c : IEnumerable<_>) =
       ofFreshIEnumerator (c.GetEnumerator())
 
-    let (|Cons|Nil|) l = match getCell l with CellCons(a,b) -> Cons(a,b) | CellEmpty -> Nil
+    let (|Cons|Nil|) l = match getCell l with CellCons(a,b) -> Cons(a,b) | CellEmpty -> Nil  
+    
+    let (|Singleton|) x = match x with Cons(a, Nil) -> Some a | _ -> None
 
     let rev r =
         let rec revAux r acc =
@@ -321,4 +325,36 @@ module LazyList =
             match fEquality x1 x2 with
             | true -> equalsWith fEquality xs1 xs2
             | false -> false
-        | Cons _, Nil | Nil, Cons _ -> false
+        | Cons _, Nil | Nil, Cons _ -> false   
+    
+    type internal LazyListMonadDef() = 
+       member __.Return x = singleton x
+       member __.ReturnFrom l = l : LazyList<_> 
+       member __.Combine(x,y) = append x y
+       member __.Delay(f: unit -> LazyList<_>) = delayed f 
+       member l.Yield x = l.Return x
+
+    let internal ll = LazyListMonadDef()
+
+    let rec choice (l1: LazyList<_>) (l2: LazyList<_>) =
+        ll {
+            match l1 with
+            | Nil -> return! l2
+            | Cons (h, Nil) -> return! (cons h l2)
+            | Cons (h, t) ->
+                yield h
+                return! choice l2 t
+        } 
+
+    type LazyListMonad() =
+       member __.Bind(m, f) = map f m |> concat
+       member __.Return x = singleton x
+       member __.ReturnFrom l = l : LazyList<_>
+       member __.Zero() = empty
+       member __.Combine(x,y) = choice x y
+       member __.Delay(f: unit -> LazyList<_>) = delayed f 
+       member l.Yield x = l.Return x
+
+    let monad = LazyListMonad()
+
+    let guard assertion = monad { if assertion then return () }

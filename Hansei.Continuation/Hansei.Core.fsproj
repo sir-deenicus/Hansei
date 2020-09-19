@@ -10,12 +10,15 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <None Include="LazyListTest.fsx" />
     <Compile Include="LazyList.fs" />
     <Compile Include="Combinatorics.fs" />
     <Compile Include="Backtracking.fs" />
     <Compile Include="Hansei.Continuations.fs" />
     <Compile Include="Utils.fs" />
   </ItemGroup>
+
+  <ItemGroup />
 
   <ItemGroup>
     <PackageReference Include="Prelude" Version="1.3.0" />

@@ -1,7 +1,7 @@
 ﻿module Hansei.Backtracking
 
 //The backtracking monad or fairstream concept is also Oleg's, copied from here: http://fortysix-and-two.blogspot.com/2009/09/simple-and-fair-backtracking.html
-//and shares the core essence of the probability monad of this library. The backtracking monad also implements
+//and like the probability monad of this library, leverages the power of lazy non-determinism. The backtracking monad also implements
 //the logic monad interface and so also captures the core of logic programming.
 
 type LazyStream<'a> =
@@ -28,7 +28,7 @@ let rec bind m f =
     | One a -> (f a)
     | Choice (a, r) -> choice (f a) (Thunk(lazy (bind r f)))
     | Thunk (Lazy i) -> Thunk(lazy (bind i f))
-
+ 
 type FairStream() =
     member __.Return a = One a
     member __.ReturnFrom(x) = x
@@ -42,10 +42,43 @@ type FairStream() =
 let bt = FairStream()
 
 module FairStream =
-    let map f xs = bt {
+    let mapAlt f xs = bt {
         let! x = xs
         return f x
     }
+
+    let rec map f m =
+        match m with
+        | Nil -> Nil
+        | One a -> One(f a)
+        | Choice (a, r) -> Choice(f a,Thunk(lazy (map f r)))
+        | Thunk (Lazy i) -> Thunk(lazy (map f i)) 
+    
+    let head = function 
+        | One a -> Some a 
+        | Choice(a, _) -> Some a
+        | Thunk (Lazy (One a)) -> Some a
+        | Thunk (Lazy (Choice(a, _))) -> Some a
+        | _ -> None
+    
+    let rec map2 f m m2 = 
+        match m, m2 with
+        | Nil, _ 
+        | _ , Nil -> Nil
+        | One a, r -> 
+            match head r with 
+            | None -> Nil
+            | Some b -> One (f a b)
+        | r, One b -> 
+            match head r with 
+            | None -> Nil
+            | Some a -> One (f a b)
+        | Choice (a, r), Choice(b,r2) -> Choice(f a b,Thunk(lazy (map2 f r r2)))
+        | Thunk (Lazy i), l -> Thunk(lazy (map2 f i l))
+        | l, Thunk (Lazy i) -> Thunk(lazy (map2 f l i))
+
+    let zip m1 m2 = map2 (fun a b -> a,b) m1 m2 
+    
 
 let rec run depth stream =
     match (depth, stream) with
