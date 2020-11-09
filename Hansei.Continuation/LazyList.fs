@@ -7,6 +7,7 @@ namespace Hansei.FSharpx.Collections
 
 open System
 open System.Collections.Generic
+open Prelude.Common
 
 #nowarn "40" // recursive initialization
 
@@ -172,6 +173,15 @@ module LazyList =
     let isEmpty (s : LazyList<'T>) = s.IsEmpty
 
     let singleton x = cons x empty
+     
+    let rec takeOrMax n s =
+        lzy(fun () ->
+          if n < 0 then invalidArg "n" "the number must not be negative"
+          elif n = 0 then CellEmpty
+          else
+            match getCell s with
+            | CellCons(a,s) -> consc a (takeOrMax (n-1) s)
+            | CellEmpty -> CellEmpty )
 
     let rec take n s =
       lzy(fun () ->
@@ -325,36 +335,31 @@ module LazyList =
             match fEquality x1 x2 with
             | true -> equalsWith fEquality xs1 xs2
             | false -> false
-        | Cons _, Nil | Nil, Cons _ -> false   
-    
-    type internal LazyListMonadDef() = 
-       member __.Return x = singleton x
-       member __.ReturnFrom l = l : LazyList<_> 
-       member __.Combine(x,y) = append x y
-       member __.Delay(f: unit -> LazyList<_>) = delayed f 
-       member l.Yield x = l.Return x
-
-    let internal ll = LazyListMonadDef()
-
-    let rec choice (l1: LazyList<_>) (l2: LazyList<_>) =
-        ll {
-            match l1 with
-            | Nil -> return! l2
-            | Cons (h, Nil) -> return! (cons h l2)
-            | Cons (h, t) ->
-                yield h
-                return! choice l2 t
-        } 
+        | Cons _, Nil | Nil, Cons _ -> false    
 
     type LazyListMonad() =
        member __.Bind(m, f) = map f m |> concat
        member __.Return x = singleton x
        member __.ReturnFrom l = l : LazyList<_>
        member __.Zero() = empty
-       member __.Combine(x,y) = choice x y
+       member __.Combine(x,y) = append x y
        member __.Delay(f: unit -> LazyList<_>) = delayed f 
        member l.Yield x = l.Return x
 
-    let monad = LazyListMonad()
+    ///Combine in this monad 
+    let lzlist = LazyListMonad()
+    
+    let lazyList = lzlist
 
-    let guard assertion = monad { if assertion then return () }
+    let guard assertion = lzlist { if assertion then return () }
+    
+    let removeDuplicates (xs: LazyList<'a>) =
+          let memory = Hashset()
+          lzlist { 
+              let! x = xs 
+              if not (memory.Contains x) then
+                  memory.Add x |> ignore 
+                  return x
+          }
+
+    let removeDuplicatesOfSeq xs = xs |> ofSeq |> removeDuplicates
