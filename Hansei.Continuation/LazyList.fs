@@ -258,38 +258,38 @@ module LazyList =
       | CellCons(h,t) -> f h; iter f t
 
     let rec copyFrom i a =
-      lzy(fun () ->
-        if i >= Array.length a then CellEmpty
-        else consc a.[i] (copyFrom (i+1) a))
+        lzy(fun () ->
+            if i >= Array.length a then CellEmpty
+            else consc a.[i] (copyFrom (i+1) a))
 
     let rec copyTo (arr: _[]) s i =
-      match getCell s with
-      | CellEmpty -> ()
-      | CellCons(a,b) -> arr.[i] <- a; copyTo arr b (i+1)
+        match getCell s with
+        | CellEmpty -> ()
+        | CellCons(a,b) -> arr.[i] <- a; copyTo arr b (i+1)
 
     let ofArray a = copyFrom 0 a
     let toArray s = Array.ofList (toList s)
 
     let rec lengthAux n s =
-      match getCell s with
-      | CellEmpty -> n
-      | CellCons(_,b) -> lengthAux (n+1) b
+        match getCell s with
+        | CellEmpty -> n
+        | CellCons(_,b) -> lengthAux (n+1) b
 
     let length (s : LazyList<'T>) = s.Length()
 
     let toSeq (s: LazyList<'T>) = (s :> IEnumerable<_>)
 
-    // Note: this doesn't dispose of the IEnumerator if the iteration is not run to the end
-    let rec ofFreshIEnumerator (e : IEnumerator<_>) =
-      lzy(fun () ->
-        if e.MoveNext() then
-          consc e.Current (ofFreshIEnumerator e)
-        else
-           e.Dispose()
-           CellEmpty)
+    // Note: this doesn't dispose of the IEnumerator if the iteration is not run to the end  
+    let rec ofFreshIEnumerator (e: IEnumerator<_>) =
+        lzy (fun () ->
+            if e.MoveNext() then
+                consc e.Current (ofFreshIEnumerator e)
+            else
+                e.Dispose()
+                CellEmpty)
 
     let ofSeq (c : IEnumerable<_>) =
-      ofFreshIEnumerator (c.GetEnumerator())
+        ofFreshIEnumerator (c.GetEnumerator())
 
     let (|Cons|Nil|) l = match getCell l with CellCons(a,b) -> Cons(a,b) | CellEmpty -> Nil  
     
@@ -337,29 +337,42 @@ module LazyList =
             | false -> false
         | Cons _, Nil | Nil, Cons _ -> false    
 
-    type LazyListMonad() =
-       member __.Bind(m, f) = map f m |> concat
-       member __.Return x = singleton x
-       member __.ReturnFrom l = l : LazyList<_>
-       member __.Zero() = empty
-       member __.Combine(x,y) = append x y
-       member __.Delay(f: unit -> LazyList<_>) = delayed f 
-       member l.Yield x = l.Return x
+    module ComputationExpression =
+        type LazyListMonad() =
+           member __.Bind(m, f) = map f m |> concat
+           member __.Return x = singleton x
+           member __.ReturnFrom l = l : LazyList<_>
+           member __.Zero() = empty
+           member __.Combine(x,y) = append x y
+           member __.Delay(f: unit -> LazyList<_>) = delayed f 
+           member __.MergeSources(xs,ys) = zip xs ys
+           member l.Yield x = l.Return x
 
-    ///Combine in this monad 
-    let lzlist = LazyListMonad()
+        let lzlist = LazyListMonad()
     
-    let lazyList = lzlist
+        let lazyList = lzlist
 
-    let guard assertion = lzlist { if assertion then return () }
-    
+        let guard assertion = lzlist { if assertion then return () }  
+
+    open ComputationExpression
+
+    let rec choice (l1: LazyList<_>) (l2: LazyList<_>) =
+        lzlist {
+            match l1 with
+            | Nil -> return! l2
+            | Cons (h, Nil) -> return! (cons h l2)
+            | Cons (h, t) ->
+                yield h
+                return! choice l2 t
+        }  
+
     let removeDuplicates (xs: LazyList<'a>) =
-          let memory = Hashset()
-          lzlist { 
-              let! x = xs 
-              if not (memory.Contains x) then
-                  memory.Add x |> ignore 
-                  return x
-          }
+        let memory = Hashset()
+        lzlist { 
+            let! x = xs 
+            if not (memory.Contains x) then
+                memory.Add x |> ignore 
+                return x
+        }
 
-    let removeDuplicatesOfSeq xs = xs |> ofSeq |> removeDuplicates
+    let removeDuplicatesOfSeq xs = xs |> ofSeq |> removeDuplicates 

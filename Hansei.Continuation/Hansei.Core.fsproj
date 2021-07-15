@@ -4,12 +4,13 @@
     <TargetFrameworks>net47;netstandard2.0;netcoreapp2.1</TargetFrameworks>
     <GeneratePackageOnBuild>true</GeneratePackageOnBuild>
     <Authors>Deen Abiola</Authors>
-    <Version>0.2.9.2</Version>
+    <Version>0.3.1</Version>
     <AssemblyName>Hansei.Core</AssemblyName>
     <PackageId>Hansei.Core</PackageId>
   </PropertyGroup>
 
   <ItemGroup>
+    <Compile Include="DiscreteProb.fs" />
     <None Include="LazyListTest.fsx" />
     <Compile Include="LazyList.fs" />
     <Compile Include="Combinatorics.fs" />
@@ -18,15 +19,17 @@
     <Compile Include="Utils.fs" />
   </ItemGroup>
 
-  <ItemGroup />
-
   <ItemGroup>
-    <PackageReference Include="Prelude" Version="1.3.0" />
+    <PackageReference Include="Prelude" Version="1.3.1" />
   </ItemGroup>
 
   <ItemGroup>
     <PackageReference Update="FSharp.Core" Version="4.7.2" />
   </ItemGroup>
+
+  <Target Name="PostBuild" AfterTargets="PostBuildEvent">
+    <Exec Command="copy &quot;C:\Users\cybernetic\source\repos\Hansei\Hansei.Continuation\bin\Release\Hansei.Core.*.nupkg&quot; &quot;C:\Users\cybernetic\Code\Packages\&quot;&#xD;&#xA;&#xD;&#xA;del &quot;C:\Users\cybernetic\source\repos\Hansei\Hansei.Continuation\bin\Release\Hansei.Core.*.nupkg&quot;" />
+  </Target>
  
 
 </Project>

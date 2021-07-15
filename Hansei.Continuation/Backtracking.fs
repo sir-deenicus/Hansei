@@ -9,57 +9,51 @@ type LazyStream<'a> =
     | One of 'a //one element
     | Choice of 'a * LazyStream<'a> //one element, and maybe more
     | Thunk of Lazy<LazyStream<'a>> //suspended stream
-      
-let rec choice r r' =
+  
+let rec choice k r r' = 
     match r with
-    | Nil -> r' //first empty-> try the second
-    | One a -> Choice(a, r') //Put in front of the new stream
-    | Choice (a, rs) -> Choice(a, choice r' rs) //interleave r and r' here
-    | Thunk (Lazy i) ->
+    | Nil -> k r' //first empty-> try the second
+    | One a -> k (Choice(a, r')) //Put in front of the new stream
+    | Choice (a, rs) -> choice (fun xs -> k(Choice(a, xs))) r' rs //interleave r and r' here
+    | Thunk (Lazy l) ->
         match r' with
-        | Nil -> r
-        | One b -> Choice(b, r)
-        | Choice (b, rs') -> Choice(b, choice r rs')
-        | Thunk (Lazy j) -> Thunk(lazy (choice i j))
-
+        | Nil -> k l
+        | One b -> k (Choice(b, l))
+        | Choice (b, rs') -> choice (fun xs -> k(Choice(b, xs))) l rs'
+        | Thunk (Lazy l2) -> k(Thunk(lazy(choice id l l2)))
+    
 let rec bind m f =
     match m with
     | Nil -> Nil
-    | One a -> (f a)
-    | Choice (a, r) -> choice (f a) (Thunk(lazy (bind r f)))
+    | One a -> f a
+    | Choice (a, r) -> choice id (f a) (Thunk(lazy (bind r f)))
     | Thunk (Lazy i) -> Thunk(lazy (bind i f))
- 
-type FairStream() =
-    member __.Return a = One a
-    member __.ReturnFrom(x) = x
-    member __.Yield a = One a
-    member __.Bind(m, f) = bind m f
-    member __.Zero() = Nil
-    member __.Combine(r, r') = choice r r'
-    member __.Delay(f: unit -> LazyStream<_>) = Thunk(Lazy.Create f)
-    member __.MergeSources(xs, ys) = choice xs ys 
-
-let bt = FairStream()
-
+  
 module FairStream =
-    let mapAlt f xs = bt {
-        let! x = xs
-        return f x
-    }
-
     let rec map f m =
         match m with
         | Nil -> Nil
         | One a -> One(f a)
-        | Choice (a, r) -> Choice(f a,Thunk(lazy (map f r)))
+        | Choice (a, r) -> Choice(f a, Thunk(lazy (map f r)))
         | Thunk (Lazy i) -> Thunk(lazy (map f i)) 
     
     let head = function 
         | One a -> Some a 
         | Choice(a, _) -> Some a
         | Thunk (Lazy (One a)) -> Some a
-        | Thunk (Lazy (Choice(a, _))) -> Some a
-        | _ -> None
+        | Thunk (Lazy (Choice(a, _))) -> Some a 
+        | Nil -> None
+        | Thunk (Lazy _) -> 
+            failwith "Tried for head of Nested layers of lazy. It's not clear what the semantics of head should be here" //should not be encountered?
+
+    let tail = function 
+        | One _ -> Some Nil
+        | Choice(_, r) -> Some r
+        | Thunk (Lazy (One _)) -> Some Nil
+        | Thunk (Lazy (Choice(_, r))) -> Some (Thunk (lazy r))
+        | Nil -> None 
+        | Thunk (Lazy l) ->
+            failwith "Tried for tail of Nested layers of lazy. It's not clear what the semantics of tail should be here" //should not be encountered?
     
     let rec map2 f m m2 = 
         match m, m2 with
@@ -80,6 +74,18 @@ module FairStream =
     let zip m1 m2 = map2 (fun a b -> a,b) m1 m2 
     
 
+type FairStream() =
+    member __.Return a = One a
+    member __.ReturnFrom(x) = x
+    member __.Yield a = One a
+    member __.Bind(m, f) = bind m f
+    member __.Zero() = Nil
+    member __.Combine(r, r') = choice id r r'
+    member __.Delay(f: unit -> LazyStream<_>) = Thunk(Lazy.Create f)
+    member __.MergeSources(xs, ys) = FairStream.zip xs ys
+
+let bt = FairStream()
+
 let rec run depth stream =
     match (depth, stream) with
     | _, Nil -> Seq.empty
@@ -90,3 +96,10 @@ let rec run depth stream =
 
 let guard assertion = bt { if assertion then return () }
  
+let choices xs =
+    let rec build xs = bt {
+        match xs with 
+        | [] -> () 
+        | x::xs' -> yield x; return! build xs'
+     } 
+    build xs
