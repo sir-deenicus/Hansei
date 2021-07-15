@@ -222,3 +222,112 @@ let sample_dist2 maxdepth (selector) (sample_runner) (ch:ProbabilitySpace<_>) =
           (* List.rev is for literal compatibility with an earlier version *)
         | (ans,cch) -> driver pcontrib ans (List.rev cch) 
     make_threads 0 1.0 (CollectionSlim.MapSlim()) ch : ProbabilitySpace<_> 
+    
+///////////////////////////////
+
+Simple 
+
+
+module Map =
+    let inline mapDistribution projectTo m = 
+        Map.toArray m 
+        |> Array.map (fun (x,p) -> projectTo x,p) 
+        |> Array.groupBy fst 
+        |> Array.map (fun (x,xs) -> x, Array.sumBy snd xs) 
+        |> Map.ofArray 
+          
+    let inline probabilityOf mapsum filter m = 
+        mapsum (Map.filter (fun k _ -> filter k) m)
+    
+    let inline entropyOf log0 mapsum dist = -(mapsum(Map.map (fun _ p -> p * log0 p) dist))
+    
+    let inline mutualInformation log0 mapsum (joint:Map<_,_>) =
+        joint |> Map.map (fun (x,y) pxy ->
+            let px = probabilityOf mapsum (fst >> (=) x) joint
+            let py = probabilityOf mapsum (snd >> (=) y) joint 
+              
+            pxy * log0(pxy/(px * py))) 
+    
+    let inline kldivergence log0 mapsum (pA:Map<_,_>) (pB:Map<_,_>) =
+        pA |> Map.map (fun x p_a ->        
+            let p_b = probabilityOf mapsum ((=) x) pB
+            p_a * log0(p_a/ p_b)) 
+    
+    let inline conditionalProbability conditional matchwith m =
+        let sub = Array.filter (fun (k, _) -> conditional k) m
+        let matches = Array.filter (fun (k, _) -> matchwith k) sub
+        (Array.sumBy snd matches) / (Array.sumBy snd sub)
+
+
+module ProbTools =      
+    let filterWith f data = 
+       let matches = data |> Array.filter f
+       (Array.length matches |> float) / (float data.Length) 
+          
+    let inline conditionalProbability conditional matchwith m = 
+         let sub = Map.filter (fun k _ -> conditional k) m
+         let matches = Map.filter (fun k _ -> matchwith k) sub
+         (Map.sum matches) / (Map.sum sub)
+         
+    let inline conditionalSubspace conditional m = 
+         let sub = Map.filter (fun k _ -> conditional k) m    
+         Map.normalize sub
+         
+    let inline sum p = List.sumBy fst p
+     
+    let inline filterToSubspace conditional m = Map.filter (fun k _ -> conditional k) m    
+      
+    let filterWithCondition conditional f data =
+        let sub = Array.filter conditional data
+        let matches = sub |> Array.filter f
+        (Array.length matches |> float) / (float sub.Length)
+
+    let inline probabilityOf filter m =
+        Array.sumBy snd (Array.filter (fun (k, _) -> filter k) m)
+
+    let toBits x = x / log 2.
+
+    let inline log0 x =
+        if x = 0. then 0.
+        else log x
+
+    let inline entropy dist = -Seq.sumBy (fun (_, p) -> p * log0 p) dist
+
+    let inline betaMean (a, b) = a / (a + b)
+
+    let inline dirichletMean (a : Map<_, _>) =
+        let total = Map.sum a in Map.map (fun _ a_i -> a_i / total) a
+
+    let updateBeta (a, b) t =
+        if t then (a + 1., b)
+        else (a, b + 1.)
+
+    let updateDirichlet (m : Map<_, _>) x = Map.add x (m.[x] + 1.) m
+
+//////////////////////
+
+//let inline testPath (paths : Dict<_,_>) x =
+//    match paths.tryFind x with
+//    | Some -1. -> true, -1.
+//    | Some r -> false, r
+//    | None -> false, 1.
+      
+//let rec propagateUp maxWeight isreward (paths : Dict<_, _>) attenuateUp r =
+//    function
+//    | _ when r < 0.01 -> ()
+//    | [] -> ()
+//    | (_ :: path) ->
+//        paths.ExpandElseAdd path (fun v ->
+//            if v = -1. || v >= maxWeight then v
+//            else max 0. (if isreward then v + r
+//                         else v * r)) (if isreward then min maxWeight (1. + r)
+//                                       else r)
+//        propagateUp maxWeight isreward paths attenuateUp (r * attenuateUp) path
+
+//type PathGuide<'a when 'a : equality>(?attenutate, ?priorPaths, ?maxPropagatorWeight) =
+//    let paths = defaultArg priorPaths (Dict<'a list,_>())
+//    let atten = defaultArg attenutate 0.5
+//    let propweight = defaultArg maxPropagatorWeight 1.
+//    member __.PropagateUp isreward r path = propagateUp propweight isreward paths atten r path
+//    member __.TestPath path = testPath paths path  
+ 

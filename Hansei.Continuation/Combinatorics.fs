@@ -1,16 +1,19 @@
-﻿module Hansei.Combinatorics 
+﻿module Hansei.Combinatorics
+
+open Hansei.FSharpx.Collections
+open Prelude.Common
 
 //https://www.programminglogic.com/integer-partition-algorithm/
 let numberOfPartitions n =
     let table =
         Array.init (n + 1) (fun i ->
             Array.init (n + 1) (fun _ ->
-                if i = 0 then 1I else 0I)) 
+                if i = 0 then 1I else 0I))
     for i in 0 .. n do
         for j in 1 .. n do
             if (i - j < 0)
             then table.[i].[j] <- table.[i].[j - 1]
-            else table.[i].[j] <- table.[i].[j - 1] + table.[i - j].[j] 
+            else table.[i].[j] <- table.[i].[j - 1] + table.[i - j].[j]
     table.[n].[n]
 
 
@@ -22,7 +25,7 @@ let integerPartitionsDesc n =
     let mutable k = 0
     // Initialize first partition as number itself
     p.[0] <- n
-    // This loop first prints current partition, then generates next partition. 
+    // This loop first prints current partition, then generates next partition.
     // The loop stops when the current partition has all 1s
     let rec loop() = seq {
         yield p.[..k]
@@ -47,7 +50,7 @@ let integerPartitionsDesc n =
             // Copy rem_val to next position and increment position
             p.[k + 1] <- rem_val
             k <- k + 1
-            yield! loop()  
+            yield! loop()
         }
     loop()
 
@@ -68,3 +71,49 @@ let integerPartitionsAsc n =
             a.[k] <- x + y
             yield a.[..k]
     }
+
+
+let generatePossibilities alphabet n =
+    let rec iterate symbols i = seq {
+        if i = 0 then yield List.rev symbols
+        else
+            for symbol in alphabet do
+                yield! iterate (symbol::symbols) (i-1)
+        }
+    iterate [] n
+
+let powerset (items : _ []) =
+    let n = items.Length
+    seq {
+        for bitpattern in generatePossibilities [ false; true ] n do
+            yield [| for i in 0..n - 1 do
+                        if bitpattern.[i] then yield items.[i] |]
+    }
+
+let powerset2 n (items : _ seq) =
+    let itemsList = LazyList.ofSeq items
+    seq {
+        for bitpattern in generatePossibilities [ false; true ] n do
+            yield [| for i in 0..n - 1 do
+                        if bitpattern.[i] then
+                            yield LazyList.head (LazyList.skip i itemsList) |]
+    }
+
+
+let permutationsMaxLen comparer takeN items =
+    generatePossibilities items takeN
+    |> Seq.map List.removeDuplicates
+    |> Seq.filter (fun l -> comparer l.Length takeN)
+
+let permutations takeN items = permutationsMaxLen (=) takeN items 
+
+let combinations takeN items =
+    permutations takeN items
+    |> Seq.map List.sort
+    |> Seq.removeDuplicates
+
+let combinationsMaxLen takeN items = 
+    permutationsMaxLen (<=) takeN items
+    |> Seq.map List.sort
+    |> Seq.removeDuplicates
+

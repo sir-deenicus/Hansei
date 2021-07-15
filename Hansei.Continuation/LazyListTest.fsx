@@ -1,31 +1,33 @@
 ﻿#r @"bin\Debug\netcoreapp2.1\Hansei.Core.dll"
 
 open Hansei.FSharpx.Collections
+open Hansei.FSharpx.Collections.LazyList.ComputationExpression
+
 #time "on"
 
-LazyList.monad { let! p = LazyList.ofList [ 1..1000 ]
-                 let! q = LazyList.ofList [ 1..1000 ]
-                 return (p, q) }
+lzlist { let! p = LazyList.ofList [ 1..1000 ]
+         let! q = LazyList.ofList [ 1..1000 ]
+         return (p, q) }
 |> LazyList.take 200000
 |> LazyList.toArray
 
-LazyList.monad {
+lzlist {
     let! x = LazyList.ofList [1..10]
     let! y = LazyList.ofList [1..10]
-    do! LazyList.guard (x > y && x % 2 = 0) 
+    do! guard (x > y && x % 2 = 0) 
     printfn "%A" (x,y)
     return (x,y) 
 } |> LazyList.toArray 
 
 let rec naturals n =
-    LazyList.monad {
-        do! LazyList.guard (n >= 0I)
+    lzlist {
+        do! guard (n >= 0I)
         yield n
         return! (naturals (n+1I))
     }
 
 let rec integers z =
-    LazyList.monad {
+    lzlist {
         yield z
         if z <> 0I then yield -z
         return! integers (z + 1I)
@@ -38,7 +40,7 @@ integers 0I
 LazyList.zip (naturals 0I) (integers 0I) 
 |> LazyList.take 10 
 |> LazyList.toArray
-
+ 
 LazyList.choice (integers 0I) (integers 10I)
 |> LazyList.take 100_000
 |> LazyList.toArray
@@ -67,14 +69,15 @@ module FairStreamTests =
             yield z
             if z <> 0I then yield -z
             return! integers (z + 1I)
-        }
+        } 
 
-    let zz =
-        integers 0I
-        |> FairStream.mapAlt ((*) 2I)
-        |> run 100
-        |> Seq.take 10
-        |> Seq.toArray
+    let rationalsIntPair (n,d) =
+        bt {
+            do! guard (d <> 0I)
+            let! p = integers n
+            let! q = integers d
+            return (p,q)
+        }
 
     let zz2 =
         integers 0I
@@ -96,3 +99,15 @@ module FairStreamTests =
     |> Seq.take 150000 
     |> Seq.toArray 
     |> Array.length
+
+    
+    let zz =
+        rationalsIntPair  (0I,1I)
+        |> run 91
+        |> Seq.toArray  
+
+    //with no guard check, 30 yields 306; 42 = 1500; 50 = 4174; 90 = 644511
+    let rintpair5 = [|(0, 1); (0, -1)|]
+    let rintpair10 = [|(0, 1); (0, -1); (1, 1); (0, 2); (-1, 1); (1, -1); (0, -2); (-1, -1); (2, 1); (1, 2); (0, 3)|]
+
+    Array.map (fun (x,y) -> int x, int y) zz = rintpair10

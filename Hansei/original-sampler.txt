@@ -73,3 +73,61 @@ let inline sample_parallel shallowmaxdepth n maxdepth maxtime nsamples (distr) :
     |> List.concat
     |> List.groupBy snd
     |> List.map (fun (v, ps) -> List.averageBy fst ps, v)
+
+//////////////////////
+
+Store samplers here.
+
+module Samplers =
+    let rec sample_beta n a b = 
+        if n <= 0 then  (round 2 (a/(a+b)))
+        else let i = Stats.discreteSample [|a/(a+b);b/(a+b)|]
+             if i = 0 then sample_beta (n - 1) (a+1.) b
+             else sample_beta (n-1) a (b+1.)
+
+    let sample_poisson lambda = 
+        let p = exp -lambda
+        let u = random.NextDouble()
+        let rec loop s p x =
+            if u <= s then x 
+            else let x' = x + 1.
+                 let p' = p * lambda/x'
+                 loop (s+p') p' x'
+        loop p p 0.
+
+    let rec sample_std_normal () =
+      let u = max Double.Epsilon (random.NextDouble())
+      let v = max Double.Epsilon (random.NextDouble())
+
+      sqrt (-2. * log u)  * cos(2. * pi * v) 
+
+    let sample_std_lognormal = sample_std_normal >> exp
+
+    let sample_normal mean stdev = mean + sample_std_normal() * stdev
+
+    let sample_lognormal mu scale = exp(mu + sample_std_normal() * scale)
+  
+    let sample_gamma a = 
+        let d = a - 1./3. 
+        let c = 1./(sqrt 9. * d)
+        let rec loop () = 
+            let z = sample_std_normal() 
+            let u = random.NextDouble()
+            let v = (1. + c * z) ** 3.
+            let dv = d * v
+            if z > -1./c && log u < 0.5 * z**2. + d - dv + d * log v then round 1 dv 
+            else loop()
+        loop () 
+    
+    let sample_exponential roundto lambda = 
+        let u = random.NextDouble()
+        round roundto ((-log u)/lambda) 
+
+////////////////
+
+////////////////////////////////////// 
+//let insertWith fn key item m =
+//    let v' = Map.tryPick (fun k' v' -> if key = k' then Some v' else None) m
+//    match v' with
+//    | Some v' -> Map.add key (fn item v') m
+//    | None -> Map.add key item m 
