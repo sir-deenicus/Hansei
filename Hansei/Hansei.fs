@@ -6,6 +6,7 @@ open Prelude.Common
 open Prelude.Math 
 open System
 open Prelude.Math
+open Utils.Sampling
 
 //open FSharp.Collections.ParallelSeq
 
@@ -26,9 +27,10 @@ and WeightedTree<'T> =
     | Value of 'T 
     | Continued of Lazy<ProbabilitySpace<'T>>    
 
+type ProbabilityContinuation<'a,'b> = 'a -> ProbabilitySpace<'b>
 
 type ProbSearchResult<'T> =
-    {Values : ProbabilitySpace<'T>
+    {Values : list<float * 'T>
      Continuation : ProbabilitySpace<'T>
      Paths : Dict<int32 list, float>}
 
@@ -40,9 +42,9 @@ let reflect tree k =
         
     make_choices tree  : ProbabilitySpace<_> 
 
-let variable_elim reify f arg = reflect (reify (f arg))    
+let variable_elim reify f arg zz = reflect (reify (f arg)) zz    
     
-let distribution ch k = List.map (fun (p,v) -> (p, Continued(lazy(k v)))) ch : ProbabilitySpace<_>
+let distribution ch (k:ProbabilityContinuation<_,_>) = List.map (fun (p,v) -> (p, Continued(lazy(k v)))) ch : ProbabilitySpace<_>
 
 let fail () = distribution []
 
@@ -58,7 +60,7 @@ let filterDistribution f p = cont {
     return x
 }   
 
-let inline reify0 m = m (fun x -> [(1.0, Value x)] : ProbabilitySpace<_>)
+let inline reify0 (m:ProbabilityContinuation<_,_> -> 'b) = m (fun x -> [(1.0, Value x)] : ProbabilitySpace<_>)
 
 let exactly x = distribution [1., x] 
 
@@ -141,108 +143,87 @@ let shallow_explore maxdepth (choices : ProbabilitySpace<_>) =
       for (KeyValue(v, p)) in ans -> p, Value v ] : ProbabilitySpace<_>
 
 
-(* Explore the tree till we find the first success -- the first leaf
-   (V v) -- and return the resulting tree. If the tree turns out to
-   have no leaves, return the empty tree.
-*) 
+///(* Explore the tree till we find the first success -- the first leaf
+///   (V v) -- and return the resulting tree. If the tree turns out to
+///   have no leaves, return the empty tree. *) 
 let rec first_success maxdepth = function
-  | [] -> [] : ProbabilitySpace<_>
-  | _ when maxdepth = 0 -> [] 
-  | ((_,Value _) :: _) as l  -> 
+    | [] -> [] : ProbabilitySpace<_>
+    | _ when maxdepth = 0 -> [] 
+    | ((_,Value _) :: _) as l  -> 
     l |> List.groupBy snd 
-      |> List.map (fun (v, ps) -> List.sumBy fst ps, v)
-  | (pt,Continued (Lazy t)) :: rest -> (* Unclear: expand and do BFS *)
-      first_success (maxdepth - 1) (rest @ List.map (fun (p,v) -> (pt * p,v)) t)
+        |> List.map (fun (v, ps) -> List.sumBy fst ps, v)
+    | (pt,Continued (Lazy t)) :: rest -> (* Unclear: expand and do BFS *)
+        first_success (maxdepth - 1) (rest @ List.map (fun (p,v) -> (pt * p,v)) t)
        
 //This sampler takes after beam search or even breadth first search
 //when the width is high enough.
-//let best_first_sample_dist (maxtime : _ option) prevtabu maxwidth maxdepthval
-//    width lookaheadWidth maxTemperature niters space =
-//    let t0 = System.DateTime.Now
-//    let paths = defaultArg prevtabu (Dict<int32 list, float>())
-//    let maxbeamdepth = int (log maxwidth / log (float width))
-//    let useTemperature = maxTemperature > 1. 
-//    let gainT = maxTemperature ** (1./200.)
-//    let gainLiteT = maxTemperature ** (1./300.)
-//    let attenT = maxTemperature ** (-1./10.)
-//    let mutable T = 1.
-//    let maxdepth =
-//        if maxdepthval % 2 = 0 then maxdepthval + 1
-//        else maxdepthval
+let best_first_sample_dist (maxtime : _ option) prevtabu maxdepth maxTemperature
+    niters space = 
+    let t0 = System.DateTime.Now
+    let paths = defaultArg prevtabu (Dict<int32 list, float>())
+    let useTemperature = maxTemperature > 1. 
+    let gainT = maxTemperature ** (1./200.)
+    let gainLiteT = maxTemperature ** (1./300.)
+    let attenT = maxTemperature ** (-1./10.)
+    let mutable T = 1. 
+    let discreteSampler ps =
+        Stats.discreteSample
+            (Array.normalize [| for (p, w, _) in ps -> (p * w)**(1./T) |])  
 
-//    let discreteSampler ps =
-//        Stats.discreteSample
-//            (Array.normalize [| for (p, w, _) in ps -> (p * w)**(1./T) |])
+    let fch curpath ch =
+        List.mapi (fun i (p, t) ->
+            let pass, w = testPath paths (i :: curpath)
+            if pass then 0., 0., t else p, w, t) ch
+    let update curpath ans (pcontrib : float) = function 
+        | p, Value v ->
+            if not (paths.ContainsKey curpath) then
+                //propagateUp paths 0.5 0.1 curpath
+                paths.ExpandElseAdd curpath (fun _ -> -1.0) -1.0
+                if useTemperature then T <- max 1. (T * attenT)
+                Utils.insertWithx (+) v (p * pcontrib) ans |> ignore
+            true 
+        | _ -> false  
+    let rec loop (curpath : int32 list) maxd depth pcontrib ans =
+        function
+        | []  -> 
+            //propagateUp paths 0.5 -0.1 curpath
+            paths.ExpandElseAdd curpath (fun _ -> -1.0) -1.0
+            if useTemperature then T <- min maxTemperature (T * gainT) 
+        | [ x ] -> update (0::curpath) ans pcontrib x |> ignore
+        | _ when depth > maxdepth
+                 || (maxtime.IsSome
+                     && (DateTime.Now - t0).TotalSeconds > maxtime.Value) ->
+            if useTemperature then T <- min maxTemperature (T * gainLiteT) 
+        | [ p, Continued(Lazy th) ] -> loop curpath maxd (depth + 1) (p * pcontrib) ans th
+        | ch -> 
+            let branches =
+                let mutable i = -1
+                [ for c in ch do    
+                    i <- i + 1
+                    if not (update (i::curpath) ans pcontrib c) then yield c] 
 
-//    let empty = Dict()
+            let choices =
+                sampleN_No_ReplacementsX discreteSampler 1 (fch curpath branches) 
+            for (b, (p, _, t)) in choices do
+                if p <> 0. then
+                    loop (b :: curpath) maxd (depth + 1) (pcontrib) ans [ p, t ] 
+        | _ -> ()
 
-//    let fch curpath ch =
-//        ch |> List.mapi (fun i (p, t) ->
-//            let pass, w = testPath paths (i :: curpath)
-//            if pass then 0., 0., t else p, w, t)
+    let rec sampler (ch : ProbabilitySpace<'T>) ans =
+        function
+        | 0 ->
+            let t1 = System.DateTime.Now
+            printfn "done %d worlds\nTime taken: %A seconds" niters
+                (round 3 ((t1 - t0).TotalSeconds))
+            { Values =
+                  [ for (KeyValue(v, p)) in ans -> p, v ]
+              Continuation = ch
+              Paths = paths }
+        | n ->
+            loop [] maxdepth 0 1. ans ch
+            sampler ch ans (n - 1)
 
-//    let rec loop (curpath : int32 list) maxd depth lookahead pcontrib ans =
-//        function
-//        | [] ->
-//            propagateUp paths 0.5 -0.1 curpath
-//            paths.ExpandElseAdd curpath (fun _ -> -1.0) -1.0
-//            if useTemperature then T <- min maxTemperature (T * gainT)
-//            empty
-//        | [ p, Value v ] ->
-//            propagateUp paths 0.5 0.1 curpath
-//            paths.ExpandElseAdd curpath (fun _ -> -1.0) -1.0
-//            if useTemperature then T <- max 1. (T * attenT)
-//            Utils.insertWithx (+) v (p * pcontrib) ans
-//        | _ when depth > maxdepth
-//                 || (maxtime.IsSome
-//                     && (DateTime.Now - t0).TotalSeconds > maxtime.Value) ->
-//            if lookahead then propagateUp paths 0.5 -0.01 curpath
-//            if useTemperature then T <- min maxTemperature (T * gainLiteT)
-//            empty
-//        | [ p, Continued(Lazy th) ] ->
-//            if lookahead then
-//                propagateUp paths 0.5 -0.01 curpath
-//                empty
-//            else loop curpath maxd (depth + 1) false (p * pcontrib) ans th
-//        | ch when not lookahead ->
-//            let bwidth =
-//                if depth > maxbeamdepth then 1
-//                else width
-//            let widths, lookahead, steps =
-//                if lookaheadWidth = 0 then [| bwidth |], [| false |], 0
-//                else [| lookaheadWidth; bwidth |], [| true; false |], 1
-
-//            let selected =
-//                [ for i in 0..steps do
-//                      let choices =
-//                          sampleN_without_replacement discreteSampler widths.[i]
-//                              0 [] (fch curpath ch)
-//                      yield! [ for (b, (p, _, t)) in choices do
-//                                   if p <> 0. then
-//                                       yield loop (b :: curpath) maxd
-//                                                  (depth + 1) lookahead.[i]
-//                                                  (pcontrib) ans [ p, t ] ] ]
-
-//            for samples in selected do
-//                ans.MergeWith (fun _ t -> t) (Seq.toArray samples)
-//            ans
-//        | _ -> empty
-
-//    let rec sampler (ch : ProbabilitySpace<'T>) ans =
-//        function
-//        | 0 ->
-//            let t1 = System.DateTime.Now
-//            printfn "done %d worlds\nTime taken: %A seconds" niters
-//                (round 3 ((t1 - t0).TotalSeconds))
-//            { Values =
-//                  [ for (KeyValue(v, p)) in ans -> p, Value v ]
-//              Continuation = ch
-//              Paths = paths }
-//        | n ->
-//            let ans = loop [] maxdepth 0 false 1. ans ch
-//            sampler ch ans (n - 1)
-
-//    sampler (reify0 space) (Dict()) niters
+    sampler (reify0 space) (Dict()) niters
      
 (* ------------------------------------------------------------------------ *)
 (*	Approximate inference strategies:				                        *)
@@ -441,11 +422,11 @@ let dist_selector ch =
     (ptotal, distribution (List.map (fun (p, v) -> (p / ptotal, v)) ch))
 
 let sample_importanceN3 selector d maxdpeth nsamples (thunk) =
-    let rec loop th z =
+    let rec loop th samples =
         function 
-        | 0 -> (z, nsamples)
-        | n -> loop th (th z) (n - 1)
-    sample_dist maxdpeth selector (fun z th -> loop th z nsamples) 
+        | 0 -> (samples, nsamples)
+        | n -> loop th (th samples) (n - 1)
+    sample_dist maxdpeth selector (fun samples th -> loop th samples nsamples) 
         (shallow_explore d (reify0 thunk))
 
 //let sample_importanceN4 (maxtime : _ option) selector lowp d maxdpeth nsamples

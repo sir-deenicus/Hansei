@@ -157,7 +157,7 @@ module GenericProb =
                 let selected =
                     [ for i in 0..steps do 
                         let choices =
-                            sampleN_No_Replacements discreteSampler widths.[i] (fch curpath ch)
+                            sampleN_No_ReplacementsX discreteSampler widths.[i] (fch curpath ch)
                         yield! [ for (b, (p, _, t)) in choices do
                                     if p <> zero then
                                         yield loop (b :: curpath) maxd (depth + 1)
