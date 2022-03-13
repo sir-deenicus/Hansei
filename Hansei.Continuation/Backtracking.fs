@@ -9,7 +9,7 @@ type LazyStream<'a> =
     | One of 'a //one element
     | Choice of 'a * LazyStream<'a> //one element, and maybe more
     | Thunk of Lazy<LazyStream<'a>> //suspended stream
-  
+
 let rec choice k r r' = 
     match r with
     | Nil -> k r' //first empty-> try the second
@@ -22,12 +22,13 @@ let rec choice k r r' =
         | Choice (b, rs') -> choice (fun xs -> k(Choice(b, xs))) l rs'
         | Thunk (Lazy l2) -> k(Thunk(lazy(choice id l l2)))
     
+//Does not make sense to use CPS here.
 let rec bind m f =
     match m with
     | Nil -> Nil
     | One a -> f a
     | Choice (a, r) -> choice id (f a) (Thunk(lazy (bind r f)))
-    | Thunk (Lazy i) -> Thunk(lazy (bind i f))
+    | Thunk (Lazy i) -> Thunk(lazy (bind i f)) 
   
 module FairStream =
     let rec map f m =
@@ -36,25 +37,77 @@ module FairStream =
         | One a -> One(f a)
         | Choice (a, r) -> Choice(f a, Thunk(lazy (map f r)))
         | Thunk (Lazy i) -> Thunk(lazy (map f i)) 
+            
+    let rec skipUntil giveupN f m =  
+        let rec tryfind n m =
+            if n <= 0 then None
+            else 
+                match m with
+                | Nil -> None
+                | One a as x -> if (f a) then Some x else None
+                | Choice (a, rest) as r -> 
+                    if f a then Some r
+                    else tryfind (n-1) rest
+                | Thunk (Lazy i) ->     
+                    tryfind (n-1) i
+        tryfind giveupN m
+
+    let rec first giveupN f m =  
+        let rec tryfind n m =
+            if n <= 0 then None
+            else 
+                match m with
+                | Nil -> None
+                | One a -> if (f a) then Some a else None
+                | Choice (a, r) -> 
+                    if f a then Some a
+                    else tryfind (n-1) r
+                | Thunk (Lazy i) ->     
+                    tryfind (n-1) i
+        tryfind giveupN m
+
+    let exists giveupN f m =
+        first giveupN f m |> Option.isSome
     
-    let head = function 
+    let rec headn maxn n = function 
         | One a -> Some a 
         | Choice(a, _) -> Some a
         | Thunk (Lazy (One a)) -> Some a
         | Thunk (Lazy (Choice(a, _))) -> Some a 
         | Nil -> None
-        | Thunk (Lazy _) -> 
-            failwith "Tried for head of Nested layers of lazy. It's not clear what the semantics of head should be here" //should not be encountered?
-
-    let tail = function 
+        | Thunk (Lazy l) -> 
+            if n > maxn then failwith "Nesting levels max hit"
+            else headn maxn (n+1) l
+    
+    let rec tailn maxn n = function 
         | One _ -> Some Nil
         | Choice(_, r) -> Some r
         | Thunk (Lazy (One _)) -> Some Nil
-        | Thunk (Lazy (Choice(_, r))) -> Some (Thunk (lazy r))
+        | Thunk (Lazy (Choice(_, r))) -> Some r
         | Nil -> None 
         | Thunk (Lazy l) ->
-            failwith "Tried for tail of Nested layers of lazy. It's not clear what the semantics of tail should be here" //should not be encountered?
+            if n > maxn then failwith "Nesting levels max hit"
+            else tailn maxn (n+1) l
+
+    let rec headAndTailN maxn n = function
+        | One a 
+        | Thunk (Lazy (One a)) -> Some(a, Nil)
+        | Choice(a, t)
+        | Thunk (Lazy (Choice(a, t))) -> Some(a, t)
+        | Nil -> None
+        | Thunk (Lazy l) -> 
+            if n > maxn then failwith "Nesting levels max hit"
+            else headAndTailN maxn (n+1) l
+
+    let head l = headn 3 0 l
+
+    let tail l = tailn 3 0 l
     
+    let (|Cons|Empty|) l =  
+        match (headAndTailN 3 0 l) with 
+        | None -> Empty
+        | Some(a, t) -> Cons(a,t)
+
     let rec map2 f m m2 = 
         match m, m2 with
         | Nil, _ 
@@ -72,17 +125,30 @@ module FairStream =
         | l, Thunk (Lazy i) -> Thunk(lazy (map2 f l i))
 
     let zip m1 m2 = map2 (fun a b -> a,b) m1 m2 
-    
+
+    let fold f s ls =
+        let rec loop s l =
+            match l with
+            | Empty -> s
+            | Cons(x,xs) ->
+                let s = f s x
+                loop s xs
+        loop s ls
+
+    let merge xs ys = choice id xs ys
 
 type FairStream() =
     member __.Return a = One a
     member __.ReturnFrom(x) = x
+    member fs.YieldFrom x = fs.ReturnFrom x
     member __.Yield a = One a
     member __.Bind(m, f) = bind m f
     member __.Zero() = Nil
     member __.Combine(r, r') = choice id r r'
     member __.Delay(f: unit -> LazyStream<_>) = Thunk(Lazy.Create f)
-    member __.MergeSources(xs, ys) = FairStream.zip xs ys
+    member __.MergeSources(xs, ys) =
+        FairStream.map (fun x -> FairStream.map (fun y -> (x,y)) ys) xs 
+        |> FairStream.fold (choice id) Nil
 
 let bt = FairStream()
 
@@ -101,5 +167,5 @@ let choices xs =
         match xs with 
         | [] -> () 
         | x::xs' -> yield x; return! build xs'
-     } 
+    } 
     build xs

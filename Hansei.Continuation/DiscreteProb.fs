@@ -23,7 +23,7 @@ module ListProb =
         member d.ReturnFrom vs = vs
         member d.Zero() = always one ()
 
-        member inline d.MergeSources(xs: seq<'item * 'number>, ys: seq<'item * 'number>) =
+        member inline d.MergeSources(xs: list<'item * 'number>, ys: list<'item * 'number>) =
             [ for (x, p) in xs do
                 for (y, p2) in ys do
                     yield ((x,y), p * p2) ] 
@@ -42,3 +42,10 @@ module ListProb =
     let observe one test =
         dist one { if not test then return! fail () }
          
+
+module Float =
+    let dist = ListProb.dist 1.
+    let uniform l = ListProb.uniform float 1. l
+    let observe = ListProb.observe 1.
+    let bernoulli p = ListProb.bernoulli 1. p
+    let bernoulliChoice a b p = ListProb.bernoulliChoice 1. a b p

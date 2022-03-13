@@ -1,0 +1,89 @@
+In today's episode of the Continuation Monad is a Computational Swiss army knife that does Everything, I'd like to use #fsharp to show how to easily implement reverse mode auto diff (aka generalized backpropagation in some circles) using the continuation monad & very little code
+
+```
+type Cont<'T, 'S, 'R> = ('T -> 'S) -> 'R
+type ContBuilder() =
+    member __.ReturnFrom(x) = x
+    member __.Return(x) : Cont<_, _, _> = fun k -> k x
+    member __.Bind(c, f : _ -> Cont<_, _, _>) : Cont<_, _, _> =
+        fun k -> c (fun a -> (f a) k)
+    member this.Zero() = this.Return() 
+
+let cont = ContBuilder()
+
+type DualNumber(p: float, ?d) =
+    let mutable dval = defaultArg d 0. 
+    member __.p = p 
+    member __.d
+        with get () = dval
+        and set dx = dval <- dx 
+
+    override __.ToString() = $"({p},{dval})"  
+
+let reset d =
+    for KeyValue (_, v: DualNumber) in d do
+    v.d <- 0.
+
+let gradn vars f = 
+    f (fun (v: DualNumber) -> v.d <- 1.)
+    [for KeyValue(_, v:DualNumber) in vars do v.d] 
+```
+
+
+It's well known (among those who'd read this type of thing), that composition of functions on dual numbers  also track their derivatives. Forward Mode Autodiff allows easy computation of scalar derivatives using just operator overloading & symbolic diff rules from basic calculus.
+
+
+The issue is that many functions of interest, particularly in ML, are of many dimensional inputs while often outputting just a scalar. Hence popularity of reverse mode autodiff.
+
+A specialized version known as backprop was discovered by neural net researchers. Explanations are
+
+
+usually quite involved and convoluted. In https://github.com/feiwang3311/Lantern/, the authors show you can use delimited continuations to implement reverse mode autodiff in a style very similar to the very simple forward mode. 
+
+I'd like to show you can do this with just the continuation monad,
+
+
+without making explicit use of shift/reset operators. The trick to it is reverse mode auto diff can be realized as differentiation in continuation passing style.
+
+Many programmers secretly make use of ideas closely related to/derived from (delimited) continuations without knowing
+
+
+Examples: async/await, coroutines, yield generators, exceptions. 
+
+I'll now focus on continuation passing style. In short, CPS can be seen as function invocation turned inside out. A callback is taken & is called on to continue on an iteratively built up partial computation.
+
+Compare to at once returning a computed value: `n * fac (n-1)`. This pipelined control flow is useful in functional languages with closures & tail call optimization as it turns a function tail recursive & stack safe. 
+
+Notice a sort of forward backwards sweep is evident here.
+
+
+# Autodiff. 
+
+We define functions for the basic operations. They take two dual numbers and a continuation k. We perform standard ops & pass to k, which modifies "adjoint". We use calculated modifications to in turn mutate originally passed in numbers, according to chain rule
+
+It's easier to show what happens by stepping through the execution of a forward and backwards sweep. We write the functions by manually piping the continuations into each function. The derivative is calculated for 2*x³. It's clearly anti-ergonomic. Which is where the continuation
+
+where the continuation monad comes into play. The best way to understand what the continuation monad does is to look at it not in terms of code but as theorem and proof because in fact, that's exactly what it is.
+
+Thus the key is to follow each line as one would a mathematical derivation--with function application as substitution and looking at where each paremter goes into each function and the types of it and seeing that the code has to have that particular form in order to sastisfy the types and achieve what we want: a binding operation that allows us to compose within the monad. The goal is to take a function that takes a function and change it into another function--of different types--thus enabling easier composition and weaving of the continuations 
+
+With that out of the way, we can now look at how to write functions with our continuation monad
+
+
+Notice we've now gone from impossible to formulate to slightly cumbersome to write. As the operations return a continuation, we can't join a bunch of them as typically done in math formulas and have to do binary operations line by line; reminiscent of assembly.
+
+The previous example is just a scalar function, which sort of defeats the point of demonstrating reverse mode. So here is a two dimensional example  
+
+As I earlier mentioned--the method is reminiscent of assembly--so I thought, why not use the continuation as a compilation target! And so created a very simple DSL which is vastly more egronomic and compiles to the continuation. The code for parsing the expression into continuation is also rather straightforward 
+
+And we can take gradients of functions of arbitrary dimensionality. 
+
+We parse the expression into a syntax tree "computational graph" then compile to a continuation, with a dictionary to hold variables. Now for a more complicated expression (and it works!): 
+
+And that's it for the basic idea! A fuller experience would "simply" require writing more functions for basic operations & param updates. .Before leaving, one more thing is to look at what control flow might look like in this setting. I'm thinking have something based on nesting continuations, so something like in the image below. Which works!
+
+Although I originally started this as a proof of principle that you could fit reverse mode auto-diff (which powers learning in today's neural networks) into something as say, symbolic as the continuation monad, I got a little bit carried away. Adding capabilities such as gradients on arbitrary dimensionality, parsing into continuations and even a control flow operator. 
+
+Note again that this isn't meant to actually be something practical, rather it is to show just how broadly capable and general such a small idea is. 
+
+

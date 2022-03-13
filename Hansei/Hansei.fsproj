@@ -8,6 +8,9 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <None Include="auto-diff.fsx" />
+    <None Include="hansei-v2.fsx" />
+    <None Include="search-monad.fsx" />
     <None Include="importanceSamplerTest.fsx" />
     <None Include="original-sampler.txt" />
     <None Include="history.txt" />

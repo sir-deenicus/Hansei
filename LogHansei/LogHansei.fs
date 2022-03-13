@@ -5,8 +5,7 @@ open Prelude.Math
 open System             
 open Hansei.Continuation
 open Hansei.Utils
-open Hansei.Core
-     
+open Hansei.Core 
 
 //===========
 let log_nearly_one = log(1.0 - 1e-7);

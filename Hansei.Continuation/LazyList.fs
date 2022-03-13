@@ -104,7 +104,7 @@ module LazyList =
           | None       -> CellEmpty
           | Some (x,z) -> CellCons (x,unfold f z))
 
-    let rec append l1  l2 = lzy(fun () ->  (appendc l1 l2))
+    let rec append l1 l2 = lzy(fun () ->  (appendc l1 l2))
     and appendc l1 l2 =
       match getCell l1 with
       | CellEmpty -> force l2
@@ -225,7 +225,7 @@ module LazyList =
 
     let fold f s l =
         let rec loop s l =
-            match  getCell l with
+            match getCell l with
             | CellEmpty -> s
             | CellCons(x,xs) ->
                 let s = f s x
@@ -337,16 +337,23 @@ module LazyList =
             | false -> false
         | Cons _, Nil | Nil, Cons _ -> false    
 
+    let ofOption = function
+        | None -> empty
+        | Some x -> ofList [x]
+
+
     module ComputationExpression =
         type LazyListMonad() =
-           member __.Bind(m, f) = map f m |> concat
-           member __.Return x = singleton x
-           member __.ReturnFrom l = l : LazyList<_>
-           member __.Zero() = empty
-           member __.Combine(x,y) = append x y
-           member __.Delay(f: unit -> LazyList<_>) = delayed f 
-           member __.MergeSources(xs,ys) = zip xs ys
-           member l.Yield x = l.Return x
+            member __.Bind(m, f) = map f m |> concat
+            member __.Return x = singleton x
+            member __.ReturnFrom l = l : LazyList<_>
+            member __.Zero() = empty
+            member __.Combine(x,y) = append x y
+            member __.Delay(f: unit -> LazyList<_>) = delayed f 
+            member __.MergeSources(xs,ys) = 
+                concat (map (fun x -> map (fun y -> (x,y)) ys) xs) 
+            member l.Yield x = l.Return x
+            member ll.YieldFrom l = ll.ReturnFrom l
 
         let lzlist = LazyListMonad()
     

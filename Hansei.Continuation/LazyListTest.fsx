@@ -1,4 +1,4 @@
-﻿#r @"bin\Debug\netcoreapp2.1\Hansei.Core.dll"
+﻿#r @"bin\Release\netstandard2.1\Hansei.Core.dll"
 
 open Hansei.FSharpx.Collections
 open Hansei.FSharpx.Collections.LazyList.ComputationExpression
@@ -111,3 +111,31 @@ module FairStreamTests =
     let rintpair10 = [|(0, 1); (0, -1); (1, 1); (0, 2); (-1, 1); (1, -1); (0, -2); (-1, -1); (2, 1); (1, 2); (0, 3)|]
 
     Array.map (fun (x,y) -> int x, int y) zz = rintpair10
+
+    let xs,ys = choices [0..3], choices [0..3]
+    
+    FairStream.merge xs ys 
+    |> run 50
+    |> Seq.toArray
+    
+    FairStream.map (fun x -> FairStream.map (fun y -> (x,y)) ys) xs 
+    |> FairStream.fold (FairStream.merge) Nil
+    |> run 3
+    |> Seq.toArray
+    |> Array.sort
+    |> fun a -> a = [|for x in [0..3] do for y in [0..3] -> x,y|]
+
+    let incrementalPrimes() =
+        let seenPrimes = Hashset()
+        let test x = 
+            seenPrimes |> Seq.exists (fun p -> x % p = 0)
+    
+        let rec primes i =  seq {
+            if not (test i) then 
+                yield i
+                seenPrimes.Add i |> ignore
+                yield! primes (i + 1)
+            else yield! primes (i + 1)
+        }
+    
+        primes 2
