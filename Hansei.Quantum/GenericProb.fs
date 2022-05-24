@@ -96,93 +96,93 @@ module GenericProb =
                 loop (maxdepth - 1) (rest @ List.map (fun (p,v) -> (pt * p,v)) t) 
         loop maxdepth ch
 
-    //This sampler takes after beam search or even breadth first search
-    //when the width is high enough.
-    let inline best_first_sample_dist (maxtime : _ option) prevtabu 
-        zero one tofloat maxwidth maxdepthval width lookaheadWidth 
-        maxTemperature niters space =
+    ////This sampler takes after beam search or even breadth first search
+    ////when the width is high enough.
+    //let inline best_first_sample_dist (maxtime : _ option) prevtabu 
+    //    zero one tofloat maxwidth maxdepthval width lookaheadWidth 
+    //    maxTemperature niters space =
 
-        let t0 = System.DateTime.Now
-        let paths = defaultArg prevtabu (Dict<int32 list, float>())
-        let maxbeamdepth = int (log maxwidth / log (float width))
-        let gainT = maxTemperature ** (1./200.)
-        let gainLiteT = maxTemperature ** (1./300.)
-        let attenT = maxTemperature ** (-1./10.)
-        let useTemperature = maxTemperature > 1. 
-        let mutable T = 1.
-        let maxdepth = if maxdepthval % 2 = 0 then maxdepthval + 1 else maxdepthval  
-        let discreteSampler ps =  
-            Stats.discreteSample (Array.normalize [|for (p,w,_) in ps -> (tofloat p * w) ** (1./T)|])
-        let empty = Dict()
-        let fch curpath ch =
-            ch
-            |> List.mapi (fun i (p, t) ->
-                    let pass, w = testPath paths (i :: curpath)
-                    if pass then zero, 0., t
-                    else p, w, t)
-        let rec loop (curpath : int32 list) maxd depth lookahead pcontrib ans =
-            function
-            | [] -> //FIX PRP{AGATE
-                propagateUp 1. false paths 0.5 -0.1 curpath
-                paths.ExpandElseAdd curpath (fun _ -> -1.) -1.
-                if useTemperature then T <- min maxTemperature (T * gainT)
-                empty  
-            | ([ p, Value v ] : GenericProbabilitySpace<'W, 'T>) ->
-                propagateUp  1. true paths 0.5 0.1 curpath
-                paths.ExpandElseAdd curpath (fun _ -> -1.) -1.
-                if useTemperature then T <- max 1. (T * attenT)
-                Utils.insertWithx (+) v (p * pcontrib) ans
-            | _ when depth > maxdepth
-                        || (maxtime.IsSome
-                            && (DateTime.Now - t0).TotalSeconds > maxtime.Value) -> 
-                if lookahead then
-                    propagateUp 1. false paths 0.5 -0.01 curpath
-                if useTemperature then T <- min maxTemperature (T * gainLiteT)
-                empty
-            | [ p, Continued(Lazy th) ] ->
-                if lookahead then
-                    propagateUp 1. true paths 0.5 -0.01 curpath
-                    empty
-                else loop curpath maxd (depth + 1) false (p * pcontrib) ans th
-            | ch when not lookahead ->              
-                let bwidth =
-                    if depth > maxbeamdepth then 1
-                    else width 
+    //    let t0 = System.DateTime.Now
+    //    let paths = defaultArg prevtabu (Dict<int32 list, float>())
+    //    let maxbeamdepth = int (log maxwidth / log (float width))
+    //    let gainT = maxTemperature ** (1./200.)
+    //    let gainLiteT = maxTemperature ** (1./300.)
+    //    let attenT = maxTemperature ** (-1./10.)
+    //    let useTemperature = maxTemperature > 1. 
+    //    let mutable T = 1.
+    //    let maxdepth = if maxdepthval % 2 = 0 then maxdepthval + 1 else maxdepthval  
+    //    let discreteSampler ps =  
+    //        Stats.discreteSample (Array.normalize [|for (p,w,_) in ps -> (tofloat p * w) ** (1./T)|])
+    //    let empty = Dict()
+    //    let fch curpath ch =
+    //        ch
+    //        |> List.mapi (fun i (p, t) ->
+    //                let pass, w = testPath paths (i :: curpath)
+    //                if pass then zero, 0., t
+    //                else p, w, t)
+    //    let rec loop (curpath : int32 list) maxd depth lookahead pcontrib ans =
+    //        function
+    //        | [] -> //FIX PRP{AGATE
+    //            propagateUp 1. false paths 0.5 -0.1 curpath
+    //            paths.ExpandElseAdd curpath (fun _ -> -1.) -1.
+    //            if useTemperature then T <- min maxTemperature (T * gainT)
+    //            empty  
+    //        | ([ p, Value v ] : GenericProbabilitySpace<'W, 'T>) ->
+    //            propagateUp  1. true paths 0.5 0.1 curpath
+    //            paths.ExpandElseAdd curpath (fun _ -> -1.) -1.
+    //            if useTemperature then T <- max 1. (T * attenT)
+    //            Utils.insertWithx (+) v (p * pcontrib) ans
+    //        | _ when depth > maxdepth
+    //                    || (maxtime.IsSome
+    //                        && (DateTime.Now - t0).TotalSeconds > maxtime.Value) -> 
+    //            if lookahead then
+    //                propagateUp 1. false paths 0.5 -0.01 curpath
+    //            if useTemperature then T <- min maxTemperature (T * gainLiteT)
+    //            empty
+    //        | [ p, Continued(Lazy th) ] ->
+    //            if lookahead then
+    //                propagateUp 1. true paths 0.5 -0.01 curpath
+    //                empty
+    //            else loop curpath maxd (depth + 1) false (p * pcontrib) ans th
+    //        | ch when not lookahead ->              
+    //            let bwidth =
+    //                if depth > maxbeamdepth then 1
+    //                else width 
               
-                let widths, lookahead, steps = 
-                    if lookaheadWidth = 0 then [|bwidth|], [|false|], 0
-                    else
-                        [|lookaheadWidth;bwidth|], [|true; false|], 1
+    //            let widths, lookahead, steps = 
+    //                if lookaheadWidth = 0 then [|bwidth|], [|false|], 0
+    //                else
+    //                    [|lookaheadWidth;bwidth|], [|true; false|], 1
 
-                let selected =
-                    [ for i in 0..steps do 
-                        let choices =
-                            sampleN_No_ReplacementsX discreteSampler widths.[i] (fch curpath ch)
-                        yield! [ for (b, (p, _, t)) in choices do
-                                    if p <> zero then
-                                        yield loop (b :: curpath) maxd (depth + 1)
-                                                lookahead.[i] (pcontrib) ans [ p, t ] ] ]
+    //            let selected =
+    //                [ for i in 0..steps do 
+    //                    let choices =
+    //                        sampleN_No_ReplacementsX discreteSampler widths.[i] (fch curpath ch)
+    //                    yield! [ for (b, (p, _, t)) in choices do
+    //                                if p <> zero then
+    //                                    yield loop (b :: curpath) maxd (depth + 1)
+    //                                            lookahead.[i] (pcontrib) ans [ p, t ] ] ]
 
-                for samples in selected do
-                    ans.MergeWith (fun _ t -> t) (Seq.toArray samples) 
-                ans
-            | _ -> empty
+    //            for samples in selected do
+    //                ans.MergeWith (fun _ t -> t) (Seq.toArray samples) 
+    //            ans
+    //        | _ -> empty
 
-        let rec sampler (ch : GenericProbabilitySpace<'W, 'T>) ans =
-            function
-            | 0 ->
-                let t1 = System.DateTime.Now
-                printfn "done %d worlds\nTime taken: %A seconds" niters
-                    (round 3 ((t1 - t0).TotalSeconds))
-                { Values = 
-                    [ for (KeyValue(v, p:'W)) in ans -> p, Value v ]; 
-                  Continuation = ch; 
-                  Paths = paths}
-            | n ->
-                let ans = loop [] maxdepth 0 false one ans ch
-                sampler ch ans (n - 1)  
+    //    let rec sampler (ch : GenericProbabilitySpace<'W, 'T>) ans =
+    //        function
+    //        | 0 ->
+    //            let t1 = System.DateTime.Now
+    //            printfn "done %d worlds\nTime taken: %A seconds" niters
+    //                (round 3 ((t1 - t0).TotalSeconds))
+    //            { Values = 
+    //                [ for (KeyValue(v, p:'W)) in ans -> p, Value v ]; 
+    //              Continuation = ch; 
+    //              Paths = paths}
+    //        | n ->
+    //            let ans = loop [] maxdepth 0 false one ans ch
+    //            sampler ch ans (n - 1)  
 
-        sampler (reify0 one space) (Dict()) niters 
+    //    sampler (reify0 one space) (Dict()) niters 
     
     (* ------------------------------------------------------------------------ *)
     (*	Approximate inference strategies:				    *)

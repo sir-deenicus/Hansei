@@ -570,18 +570,26 @@ module Distributions =
              else return! dirichlet3 roundto (draws-1) a b (c+1.)
     }
 
-    let rec dirichlet roundto draws d = cont {
-        let z = List.sum d
-        if draws <= 0 then 
-            return (List.map (fun a -> round roundto (a/z)) d)
-        else          
-            let ps = List.mapi (fun i a -> (a/z), i) d
-            let! ball = categorical ps
-            let d' = List.mapi (fun i a -> if i = ball then a + 1. else a) d
-            return! dirichlet roundto (draws - 1) d'         
-    }
-  
-    let discretizedSampler coarsener sampler (n:int) = cont {
-        return! categorical ([for _ in 1..n -> sampler ()] |> coarsenWith coarsener)   
-    }
+    let rec dirichlet roundto draws d =
+        cont {
+            let z = List.sum d
 
+            if draws <= 0 then
+                return (List.map (fun a -> round roundto (a / z)) d)
+            else
+                let ps = List.mapi (fun i a -> (a / z), i) d
+                let! ball = categorical ps
+
+                let d' =
+                    List.mapi (fun i a -> if i = ball then a + 1. else a) d
+
+                return! dirichlet roundto (draws - 1) d'
+        }  
+    let discretizedSampler coarsener sampler (n: int) =
+        cont {
+            return!
+                categorical (
+                    [ for _ in 1 .. n -> sampler () ]
+                    |> coarsenWith coarsener
+                )
+        }

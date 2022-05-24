@@ -90,7 +90,7 @@ let powerset (items : _ []) =
                         if bitpattern.[i] then yield items.[i] |]
     }
 
-let powerset2 n (items : _ seq) =
+let powersetSeq n (items : _ seq) =
     let itemsList = LazyList.ofSeq items
     seq {
         for bitpattern in generatePossibilities [ false; true ] n do
@@ -116,4 +116,4 @@ let combinationsMaxLen takeN items =
     permutationsMaxLen (<=) takeN items
     |> Seq.map List.sort
     |> Seq.removeDuplicates
-
+     

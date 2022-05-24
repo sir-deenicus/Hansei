@@ -4,10 +4,9 @@ open Prelude.Common
 open Prelude.Math
 open System
 open Hansei.Continuation
-open CollectionSlim
+open DictionarySlim
 open Prelude.Collections.FibonacciHeap
-open Prelude.Collections
-open Microsoft.Collections.Extensions
+open Prelude.Collections 
 open System.Collections.Generic
 
 //////////////////////////////////////  
@@ -22,12 +21,6 @@ let insertWithx fn key item (d:Dict<_,_>) =
     | Some v' -> d.[key] <- (fn item v') 
     | None -> d.Add(key, item)
     d
-
-let inline insertIntoSlim fn key item (m:MapSlim<_,_>) =   
-    match m.GetOption key with
-    | ValueSome v' -> m.Set (key, fn item v')  
-    | ValueNone -> m.Set(key, item)
-    m
 
 
 //////////////////////////////////////

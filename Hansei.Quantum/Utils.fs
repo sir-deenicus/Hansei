@@ -33,16 +33,9 @@ let inline mkProbabilityMap normalize t =
 ////////////////////////////  
 module Symbolic =
     open Hansei
-
+    open Prelude.ProbabilityTools
     let log0 x = if x = 0Q then 0Q else log x
 
     let toBits x = x / log 2Q  
 
-    let probabilityOf filter m = Utils.probabilityOf (Map.sum 0Q) filter m 
-
-    let entropy dist = Utils.entropy log0 (Map.sum 0Q) dist
-
-    let mutualInformation (joint:Map<_,_>) = Utils.mutualInformation log0 (Map.sum 0Q) joint
-
-    let kldivergence (pA:Map<_,_>) (pB:Map<_,_>) = Utils.kldivergence log0 (Map.sum 0Q) pA pB
-         
+  

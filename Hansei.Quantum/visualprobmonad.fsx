@@ -18,7 +18,7 @@ open Hansei.FSharpx.Collections
 open Hansei.Backtracking
 open Prelude.SimpleGraphs
 
-let g = Prelude.SimpleDirectedGraphs.MultiGraph<string, string>()
+let g = Prelude.SimpleDirectedGraphs.DirectedMultiGraph<string, string>()
 
 
 g.InsertVertex "A"
@@ -45,52 +45,7 @@ g2.InsertVertex "C"
 g2.InsertEdge ("A","B")
 
 g2.GetEdges "B"
-
-//type VisualDistribution<'item, 'number when 'item: comparison> =
-//    { Categorical : ('item * 'number list) list
-//      Depth : int}
-
-//let inline bindx maxdepth (dist : VisualDistribution<'item,'number>) (k : 'item -> VisualDistribution<'changeditem list,'number>) =
-//    //let g = dist.G
-//    let maxdepthval = Option.defaultValue Int32.MaxValue maxdepth
-//    let mutable depth = -1
-//    //g.InsertVertex "root"
-//    let l =
-//        [
-
-//        for (x,p) in dist.Categorical do
-//            //printfn "in0: %A" (depth)
-
-//            if depth < maxdepthval then
-
-//                depth <- depth + 1//dn.Depth
-//                let dn = k(x)
-
-//                depth <- max depth dn.Depth
-//                //depth <- max depth dn.Depth
-//                //printfn "in: %A" (depth)
-//                //g.InsertEdge("root", string x, (List.reduce (*) p,List.head p))
-//                for (y,p2) in dn.Categorical do
-//                    //printfn "%A" (depth, y)
-//                    //let zz = List.fold (fun (i,s) b ->
-//                    //            let n = s + string b
-//                    //            if s <> "" then
-//                    //                g.InsertVertex s
-//                    //                g.InsertVertex n
-//                    //                let ps = p @ p2
-//                    //                //printfn "%A" ps
-//                    //                let jp = (ps |> List.take (min i ps.Length) |> List.reduce (*)), ps.[(min i ps.Length) - 1]
-//                    //                g.InsertEdge(s,n, jp)
-//                    //                |> ignore
-//                    //            i+1, n) (1,"") y
-//                    //g.InsertVertex (string y) |> ignore
-//                    //g.InsertEdge (string x,string y, string(p @ p2 |> List.reduce (*))) |> ignore
-//                    yield (y, p @ p2) ]
-
-//    //printfn "%A" ps
-//    {
-//          Categorical = l
-//          Depth = depth} 
+ 
 
 ////////////////////////////////////////////////////////////////
 
@@ -197,89 +152,43 @@ let rec atleast_n_in_m_flips count flips n = dist {
 
 let bn = atleast_n_in_m_flips 2 [] 3
 
-let rec runloop sep soleLast (s:string) (g:MultiGraph<float * float>) = function
-    | [a1], [b1] when soleLast ->
-        if s <> "" then
-            g.InsertVertex s
-            if fst b1 <> 0. then 
-                g.InsertEdge(s, a1, b1) |> ignore
-    |  a1::ats, b1::bts ->
-        let n = if s = "" then a1 else (s + sep + a1)
-        if s <> "" then
-            g.InsertVertex s
-            if fst b1 <> 0. then 
-                g.InsertEdge(s, n, b1) |> ignore
-        //(((s + a1),b1)::l)
-        runloop sep soleLast n g (ats,bts)
+open Prelude.SimpleDirectedGraphs
+
+let rec constructProbGraph trackhistory zero sep soleLast (prev: string) (g: DirectedMultiGraph<_, _>) =
+    function
+    | [ node ], [ w ] when soleLast ->
+        if prev <> "" then
+            g.InsertVertex prev |> ignore
+
+            if fst w <> zero then
+                g.InsertEdge(prev, node, w) |> ignore
+    | node :: nodes, w :: ws ->
+        let node' =
+            if not trackhistory || prev = "" then node
+            else (prev + sep + node)
+
+        if prev <> "" then
+            g.InsertVertex prev |> ignore
+
+            if fst w <> zero then
+                g.InsertEdge(prev, node', w) |> ignore
+
+        constructProbGraph trackhistory zero sep soleLast node' g (nodes, ws)
     | [], [] -> ()
-    | _ -> failwith "unexpected error in runloop"
-
-let rec runloop2 sep soleLast prev (g:MultiGraph<float * float>) = function
-| [a1], [b1] when soleLast ->
-    if prev <> "" then
-        g.InsertVertex prev
-        if fst b1 <> 0. then 
-            g.InsertEdge(prev, a1, b1) |> ignore
-|  a1::ats, b1::bts -> 
-    if prev <> "" then
-        g.InsertVertex prev
-        if fst b1 <> 0. then 
-            g.InsertEdge(prev, a1, b1) |> ignore
-    //(((s + a1),b1)::l)
-    runloop2 sep soleLast a1 g (ats,bts)
-| [], [] -> ()
-| _ -> failwith "unexpected error in runloop"
-
-let fixlen maxlen s =
-    if String.length s > maxlen then s.Replace(",", "\\n").Replace("/", "\\n")
-    else s
-
-
-
-let template = System.IO.File.ReadAllText("C:\Users\cybernetic\Documents\Papers\dagre-template.txt")
-
+    | _ -> failwith "unexpected error"
+     
+      
 
 let bn =
-    distv {   
-        let! b = bernoulliChoicev "H" "T" 0.5
-        let! b2 = bernoulliChoicev "H" "T" 0.5
-        let! b3 = bernoulliChoicev "H" "T" 0.25
+    dist {   
+        let! b = bernoulliChoice "H" "T" 0.5
+        let! b2 = bernoulliChoice "H" "T" 0.5
+        let! b3 = bernoulliChoice "H" "T" 0.25
         return [b;b2;"_" ] }
-
-
-let createDagreGraph2Gen maxlen str maxw h
-    (g : MultiGraph<_>) =
-    let vs =
-        g.Vertices
-        |> Seq.map
-               (fun v ->
-               sprintf "g.setNode(%A, {label:'%s', width:%d, height:%d});" v
-                   (fixlen maxlen v) (min maxw ((String.length v) * 8)) h)
-        |> Strings.joinToStringWith "\n"
-
-    let es =
-        g.Edges
-        |> List.mapi
-               (fun i (e1, e2, w) ->
-               sprintf "g.setEdge(%A, %A, {label: %A}, 'e%d')" e1 e2 (str w) i)
-        |> Strings.joinToStringWith "\n" 
-    vs, es  
-
-let createDagreGraph2 str maxw h = createDagreGraph2Gen 9 str maxw h
-
+         
 
 open Prelude.SimpleGraphs
-let template = System.IO.File.ReadAllText("C:\Users\cybernetic\Documents\Papers\dagre-template.txt")
-
-let disp isleftright svgid w h (vs,es) =
-    let rankdir = if isleftright then """rankdir: "LR",""" else ""
-    template
-        .Replace("__EDGES_HERE__", es)
-        .Replace("__NODES_HERE__",vs)
-        .Replace("svgid", svgid)
-        .Replace("svgwidth", string w)
-        .Replace("svgheight", string h)
-        .Replace("__RANK_DIR__", rankdir)
+ 
 
 let bnn = 
     dist {
@@ -382,55 +291,83 @@ bnn
 |> List.map (fun (x, ps) -> x, List.map snd ps |> List.sum)
 |> List.sumBy snd 
 
-let kz =
-    [ for (y, ps) in bnn2 do
-        let (_, zz, p) =
-            List.fold (fun (i, s, l) b ->
-                let n = string b :: s
-                //if s <> "" then
-                //g.InsertVertex s
-                //g.InsertVertex n
-                //printfn "%A" ps
-                let jp =
-                    (ps
-                     |> List.take (min i ps.Length)
-                     |> List.reduce (*)),
-                    ps.[(min i ps.Length) - 1]
-                //g.InsertEdge(s,n, jp)
-                //|> ignore
-                i + 1, n, jp :: l) (1, [], []) y
+let inline processProbMonad (str: 'a -> string) probm =
+    [ for (nodes, ps) in probm do
+          let (_, nodelist, jointprobs) =
+              ((1, [], []), nodes)
+              ||> List.fold (fun (i, nodelist, plist) node ->
+                  let n = str node :: nodelist
 
-        if p <> [] then yield zz, List.rev  p ]
+                  let jointprob =
+                      (ps
+                       |> List.take (min i ps.Length)
+                       |> List.reduce (*)),
+                      ps.[(min i ps.Length) - 1]
 
-//normalize to sum to 1
+                  i + 1, n, jointprob :: plist)
 
-let totw = kz |> List.map snd |> List.map (List.map fst) |> List.map List.last  |> List.sum
+          if jointprobs <> [] then
+              yield nodelist, List.rev jointprobs ]
 
-let tot = kz |> List.map snd |> List.map List.head |> List.sumBy fst
+let kz = processProbMonad string bnn3
+let totw =
+    kz 
+    |> List.sumBy (snd >> List.last >> fst) 
+
+let tot =
+    kz
+    |> List.map snd
+    |> List.map List.head
+    |> List.sumBy fst
+
 let len = kz.Length
+l
+
 let kz2 =
-    [for (i, (xs,ps)) in List.zip [1..kz.Length]  kz -> 
-        let (p,cp),t = List.head ps, List.tail ps
-        let len = List.length xs
-        List.mapi (fun j x -> if j = len-1 then sprintf "%s(%d)" x i else x) 
-        xs, (p/tot,cp)::t]
+    [ for (i, (xs, ps)) in List.zip [ 1 .. kz.Length ] kz ->
+          let (p, cp), t = List.head ps, List.tail ps
+          let len = List.length xs
 
-let xs,ps = List.head kz
-let kz3 =
-    [for (xs,ps) in kz ->  
-        let len = List.length ps
-        let ps' = List.mapi (fun j (jp, cp) -> if j = len-1 then jp/totw, cp else cp,jp) ps
-        xs, ps']
+          List.mapi (fun j x ->
+              if j = len - 1 then
+                  sprintf "%s(%d)" x i
+              else x)
 
-kz
-let g = MultiGraph<float * float>()
-g.InsertVertex "root"
-for (a,b) in kz3 do
-    let n = List.head a
-    let w = List.head b
-    if not(g.ContainsEdge "root" n |> Option.defaultValue false) then
-        g.InsertEdge("root", n, w) |> ignore 
-    runloop2 "," false  "" g (a,  b)
+          xs, (p / tot, cp) :: t ]
+
+let xs, ps = List.head kz
+
+let inline buildGraph zero probmonad =
+    let preprocessed = processProbMonad string probmonad
+    
+    let totw =
+        preprocessed 
+        |> List.sumBy (snd >> List.last >> fst) 
+
+    let processed =
+        [ for (nodes, ps) in preprocessed ->
+              let len = List.length ps
+
+              let ps' =
+                  ps
+                  |> List.mapi (fun j (jointprob, condprob) ->
+                      if j = len - 1 then jointprob / totw, condprob
+                      else condprob, jointprob)
+
+              nodes, ps' ]
+    
+    let g = DirectedMultiGraph<_, _>()
+    
+    g.InsertVertex "root" |> ignore
+    
+    for (nodelist,problist) in processed do
+        let n = List.head nodelist
+        let w = List.head problist
+        if not(g.ContainsEdge ("root", n) |> Option.defaultValue false) then
+            g.InsertEdge("root", n, w) |> ignore 
+        constructProbGraph true zero "," false  "" g (nodelist, problist)
+    g
+
 g
 createDagreGraph2 (Pair.map (round 2) >> string) 100 50 g
 |> disp false "nn1" 1800 6600
@@ -443,18 +380,7 @@ bnn  |> groupit2 |> List.groupBy (fst >> List.tail)
 
 |> writeStrRaw
 
-bnn2
-
-let inline reducer isPenultimate (n, ws) =
-    if isPenultimate then Seq.reduce (fun (x,y) (u,_) -> x + u, y) ws
-    else n
-
-let inline reduceNodeWeights isPenultimate (ws:seq<_>) =
-    let parts = Seq.groupBy id ws
-    Seq.map (reducer isPenultimate) parts |> ResizeArray
-
-let inline mergeNodes (g:MultiGraph<_>) =
-    Array.iter (g.ModifyNodeEdges reduceNodeWeights) g.Vertices
+bnn2 
 
 
 mergeNodes g

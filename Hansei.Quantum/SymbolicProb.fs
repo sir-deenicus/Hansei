@@ -8,7 +8,7 @@ open Prelude.Common
 open MathNet.Numerics
 open MathNet.Symbolics.Core
 open Hansei.GenericProb
-open MathNet.Symbolics.NumberTheory
+open MathNet.Symbolics.NumberProperties
 
 type SymbolicProbabilitySpace<'T> = GenericProbabilitySpace<Expression,'T>
  

@@ -7,7 +7,7 @@ open MathNet.Symbolics.LinearAlgebra
 open MathNet.Symbolics
 open MathNet.Symbolics.Core
 open Prelude.Math
-open MathNet.Symbolics.NumberTheory
+open MathNet.Symbolics.NumberProperties
 open Prelude.Common
 
 //Core of Hansei modified from base:
