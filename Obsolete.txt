@@ -331,3 +331,104 @@ module ProbTools =
 //    member __.PropagateUp isreward r path = propagateUp propweight isreward paths atten r path
 //    member __.TestPath path = testPath paths path  
  
+
+ let log_nearly_one = log(1.0 - 1e-7);
+
+let log_add x y = let x',y' = max x y, min x y in x' + log (1. + exp(y'-x'))
+
+let log_sum = function 
+     | [] -> log 0.
+     | [p,_] -> p
+     | (p0,_)::ptail -> List.fold (fun acc (logp,_) -> log_add acc logp) p0 ptail
+
+
+let inline log_normalize (choices) =
+  let sum = log_sum choices
+  List.map (fun (p, v) -> (p - sum, v)) choices
+
+
+let inline exponentiate (choices) = List.map (keepRight exp) choices
+
+
+// compute log(1+x) without losing precision for small values of x https://www.johndcook.com/blog/csharp_log_one_plus_x/
+let logOnePlusX x = 
+    if x <= -1.0 then failwith ("Invalid input argument: " + (string x))
+
+    if abs x > 1e-4 then log(1.0 + x) // x is large enough that the obvious evaluation is OK       
+    // Use Taylor approx. log(1 + x) = x - x^2/2 with error roughly x^3/3
+    // Since |x| < 10^-4, |x|^3 < 10^-12, relative error less than 10^-8        
+    else (-0.5*x + 1.0)*x   
+
+	
+let rejection_sample_dist selector nsamples ch : 'a ProbabilitySpace =
+    let timer = Diagnostics.Stopwatch()
+    timer.Start()
+    let rec loop pcontrib ans = function
+        | [(p,Value v)]  -> insertWith log_add v (p + pcontrib) ans
+        | []         -> ans
+        | [(p,Continued (Lazy th))] -> loop (p + pcontrib) ans th
+        | ch ->
+            let (ptotal,th) = selector ch 
+            loop (pcontrib + ptotal) ans [(0.,th)] 
+
+    let rec driver ch ans = function
+        | 0 -> let ns = log(float nsamples)
+               printf "rejection_sample: done %d worlds\nTime taken: %A" nsamples (timer.Elapsed)
+               Map.fold (fun a v p -> (p - ns,Value v)::a) [] ans 
+              
+        | n -> driver ch (loop 0. ans ch) (n-1) 
+    driver (reify0 ch) Map.empty nsamples
+
+
+let sample_dist maxdepth (selector) (sample_runner) ch  =
+    let look_ahead pcontrib (ans,acc) = function (* explore the branch a bit *)
+    | (p,Value v) -> (insertWith log_add v (p + pcontrib) ans, acc)
+    | (p,Continued (Lazy t)) -> 
+        match t  with
+        | [] -> (ans,acc)
+        | [(p1,Value v)] -> 
+           (insertWith log_add v (p + p1 + pcontrib) ans, acc)
+        | ch ->
+            let ptotal = log_sum ch 
+            (ans,
+              if ptotal < log_nearly_one then
+                (p + ptotal, List.map (fun (p,x) -> (p - ptotal,x)) ch)::acc 
+              else (p, ch)::acc)
+        
+    let rec loop depth pcontrib ans = function
+    | [(p,Value v)]  -> insertWith log_add v (p + pcontrib) ans
+    | []         -> ans
+    | [(p,Continued (Lazy th))] -> loop (depth+1) (p + pcontrib) ans (th)
+    | ch when depth < maxdepth -> (* choosing one thread randomly *)
+    
+        match List.fold (look_ahead pcontrib) (ans,[]) ch with
+        | (ans,[]) -> ans
+        | (ans,cch) ->
+           let (ptotal,th) = selector cch 
+           loop (depth+1) (pcontrib + ptotal) ans th  
+     | _ -> ans
+    
+    let toploop pcontrib ans cch = (* cch are already pre-explored *)
+        let (ptotal,th) = selector cch 
+        loop 0 (pcontrib + ptotal) ans th 
+
+    let driver pcontrib vals cch =
+        let (ans,nsamples) = 
+             sample_runner Map.empty (fun ans -> toploop pcontrib ans cch)  
+
+        let ns = log (float nsamples)
+        let ans = Map.fold (fun ans v p  -> insertWith (log_add) v (ns + p) ans) ans vals 
+
+        printf "sample_importance: done %d worlds\n" nsamples;
+        Map.fold (fun a v p -> (p - ns,Value v)::a) [] ans   
+    
+    let rec make_threads depth pcontrib ans ch =  (* pre-explore initial threads *)
+        match List.fold (look_ahead pcontrib) (ans,[]) ch with
+        | (ans,[]) -> (* pre-exploration solved the problem *)
+          Map.fold (fun a v p -> (p,Value v)::a) [] ans
+        | (ans,[(p,ch)]) when depth < maxdepth -> (* only one choice, make more *)
+           make_threads (depth+1) (pcontrib + p) ans ch
+          (* List.rev is for literal compatibility with an earlier version *)
+        | (ans,cch) -> driver pcontrib ans (List.rev cch) 
+
+    make_threads 0 0. Map.empty ch 
