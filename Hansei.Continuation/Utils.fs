@@ -38,8 +38,8 @@ let inline normalizeWeights data =
 
 let inline coarsenWithGeneric tonumber f samples =  
      List.groupBy f samples
-     |> List.map (fun (x,xs) -> tonumber xs.Length, x)  
-
+     |> List.map (fun (x,xs) -> x, tonumber xs.Length)  
+     
 let coarsenWith f samples = coarsenWithGeneric float f samples
  
 

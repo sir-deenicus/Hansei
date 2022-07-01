@@ -1,6 +1,6 @@
-﻿#r @"bin\Debug\net47\Prelude.dll"
-#r @"bin\Debug\net47\Hansei.Core.dll"
-#r @"bin\Debug\net47\Hansei.dll"
+﻿#r @"..\bin\Debug\net47\Prelude.dll"
+#r @"..\bin\Debug\net47\Hansei.Core.dll"
+#r @"..\bin\Debug\net47\Hansei.dll"
 open Prelude.Math
 open Prelude.Common
 open System

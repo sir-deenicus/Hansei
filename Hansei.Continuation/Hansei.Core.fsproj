@@ -4,7 +4,7 @@
     <TargetFrameworks>netstandard2.1;net50</TargetFrameworks>
     <GeneratePackageOnBuild>true</GeneratePackageOnBuild>
     <Authors>Deen Abiola</Authors>
-    <Version>0.4.1</Version>
+    <Version>0.6</Version>
     <AssemblyName>Hansei.Core</AssemblyName>
     <PackageId>Hansei.Core</PackageId>
   </PropertyGroup>

@@ -380,55 +380,223 @@ let rejection_sample_dist selector nsamples ch : 'a ProbabilitySpace =
     driver (reify0 ch) Map.empty nsamples
 
 
-let sample_dist maxdepth (selector) (sample_runner) ch  =
-    let look_ahead pcontrib (ans,acc) = function (* explore the branch a bit *)
-    | (p,Value v) -> (insertWith log_add v (p + pcontrib) ans, acc)
-    | (p,Continued (Lazy t)) -> 
-        match t  with
-        | [] -> (ans,acc)
-        | [(p1,Value v)] -> 
-           (insertWith log_add v (p + p1 + pcontrib) ans, acc)
-        | ch ->
-            let ptotal = log_sum ch 
-            (ans,
-              if ptotal < log_nearly_one then
-                (p + ptotal, List.map (fun (p,x) -> (p - ptotal,x)) ch)::acc 
-              else (p, ch)::acc)
-        
-    let rec loop depth pcontrib ans = function
-    | [(p,Value v)]  -> insertWith log_add v (p + pcontrib) ans
-    | []         -> ans
-    | [(p,Continued (Lazy th))] -> loop (depth+1) (p + pcontrib) ans (th)
-    | ch when depth < maxdepth -> (* choosing one thread randomly *)
-    
-        match List.fold (look_ahead pcontrib) (ans,[]) ch with
-        | (ans,[]) -> ans
-        | (ans,cch) ->
-           let (ptotal,th) = selector cch 
-           loop (depth+1) (pcontrib + ptotal) ans th  
-     | _ -> ans
-    
-    let toploop pcontrib ans cch = (* cch are already pre-explored *)
-        let (ptotal,th) = selector cch 
-        loop 0 (pcontrib + ptotal) ans th 
+//==========
+//type SearchSpace<'T> = LazyList<WeightedTree<'T>>
+//    and WeightedTree<'T> = 
+//        | Value of 'T 
+//        | Continued of Lazy<SearchSpace<'T>>       
+//type ProbabilitySpace<'T> = LazyList<float * WeightedTree<'T>>
+//and WeightedTree<'T> = 
+//    | Value of 'T 
+//    | Continued of Lazy<ProbabilitySpace<'T>>     
 
-    let driver pcontrib vals cch =
-        let (ans,nsamples) = 
-             sample_runner Map.empty (fun ans -> toploop pcontrib ans cch)  
 
-        let ns = log (float nsamples)
-        let ans = Map.fold (fun ans v p  -> insertWith (log_add) v (ns + p) ans) ans vals 
+//let exploreb (maxdepth : int option) (choices : ProbabilitySpace<'T>) =
+//  let rec loop p depth down susp answers =
+//    match (down, susp, answers) with
+//    | (_, [], answers) -> answers 
+ 
+//    | (_, (pt, Value v) :: rest, (ans, susp)) ->
+//      loop p depth down rest (insertWithx (+) v (pt*p) ans, susp)
+ 
+//    | (true, (pt,Continued (Lazy t))::rest, answers) ->
+//      let down' = match maxdepth with Some x -> depth < x | None -> true
+//      loop p depth true rest <| loop (pt*p) (depth+1) down' (t) answers
+ 
+//    | (down, (pt,c)::rest, (ans,susp)) ->
+//      loop p depth down rest (ans, (pt*p,c)::susp)
 
-        printf "sample_importance: done %d worlds\n" nsamples;
-        Map.fold (fun a v p -> (p - ns,Value v)::a) [] ans   
-    
-    let rec make_threads depth pcontrib ans ch =  (* pre-explore initial threads *)
-        match List.fold (look_ahead pcontrib) (ans,[]) ch with
-        | (ans,[]) -> (* pre-exploration solved the problem *)
-          Map.fold (fun a v p -> (p,Value v)::a) [] ans
-        | (ans,[(p,ch)]) when depth < maxdepth -> (* only one choice, make more *)
-           make_threads (depth+1) (pcontrib + p) ans ch
-          (* List.rev is for literal compatibility with an earlier version *)
-        | (ans,cch) -> driver pcontrib ans (List.rev cch) 
+//  //let (ans, susp) = loop 1.0 0 true choices (Map.empty, [])
+//  let (ans,susp) = loop 1.0 0 true choices (Dict(), [])  
+//  //Map.fold (fun a v p -> (p, Value v)::a) susp ans : ProbabilitySpace<'T>
+//  [ yield! susp
+//    for (KeyValue(v,p)) in ans -> p, Value v] : ProbabilitySpace<_>
 
-    make_threads 0 0. Map.empty ch 
+//This sampler takes after beam search or even breadth first search
+//when the width is high enough.
+//let best_first_sample_dist (maxtime : _ option) prevtabu maxdepth maxTemperature
+//    niters space = 
+//    let t0 = System.DateTime.Now
+//    let paths = defaultArg prevtabu (Dict<int32 list, float>())
+//    let useTemperature = maxTemperature > 1. 
+//    let gainT = maxTemperature ** (1./200.)
+//    let gainLiteT = maxTemperature ** (1./300.)
+//    let attenT = maxTemperature ** (-1./10.)
+//    let mutable T = 1. 
+//    let discreteSampler ps =
+//        Stats.discreteSample
+//            (Array.normalize [| for (p, w, _) in ps -> (p * w)**(1./T) |])  
+
+//    let fch curpath ch =
+//        List.mapi (fun i (p, t) ->
+//            let pass, w = testPath paths (i :: curpath)
+//            if pass then 0., 0., t else p, w, t) ch
+//    let update curpath ans (pcontrib : float) = function 
+//        | p, Value v ->
+//            if not (paths.ContainsKey curpath) then
+//                //propagateUp paths 0.5 0.1 curpath
+//                paths.ExpandElseAdd curpath (fun _ -> -1.0) -1.0
+//                if useTemperature then T <- max 1. (T * attenT)
+//                Utils.insertWithx (+) v (p * pcontrib) ans |> ignore
+//            true 
+//        | _ -> false  
+//    let rec loop (curpath : int32 list) maxd depth pcontrib ans =
+//        function
+//        | []  -> 
+//            //propagateUp paths 0.5 -0.1 curpath
+//            paths.ExpandElseAdd curpath (fun _ -> -1.0) -1.0
+//            if useTemperature then T <- min maxTemperature (T * gainT) 
+//        | [ x ] -> update (0::curpath) ans pcontrib x |> ignore
+//        | _ when depth > maxdepth
+//                 || (maxtime.IsSome
+//                     && (DateTime.Now - t0).TotalSeconds > maxtime.Value) ->
+//            if useTemperature then T <- min maxTemperature (T * gainLiteT) 
+//        | [ p, Continued(Lazy th) ] -> loop curpath maxd (depth + 1) (p * pcontrib) ans th
+//        | ch -> 
+//            let branches =
+//                let mutable i = -1
+//                [ for c in ch do    
+//                    i <- i + 1
+//                    if not (update (i::curpath) ans pcontrib c) then yield c] 
+
+//            let choices =
+//                sampleN_No_ReplacementsX discreteSampler 1 (fch curpath branches) 
+//            for (b, (p, _, t)) in choices do
+//                if p <> 0. then
+//                    loop (b :: curpath) maxd (depth + 1) (pcontrib) ans [ p, t ] 
+//        | _ -> ()
+
+//    let rec sampler (ch : ProbabilitySpace<'T>) ans =
+//        function
+//        | 0 ->
+//            let t1 = System.DateTime.Now
+//            printfn "done %d worlds\nTime taken: %A seconds" niters
+//                (round 3 ((t1 - t0).TotalSeconds))
+//            { Values =
+//                  [ for (KeyValue(v, p)) in ans -> p, v ]
+//              Continuation = ch
+//              Paths = paths }
+//        | n ->
+//            loop [] maxdepth 0 1. ans ch
+//            sampler ch ans (n - 1)
+       
+
+//let random_selector2 =
+//    let rec selection r ptotal pcum =
+//        function
+//        | [] -> failwith "Choice selection: can't happen"
+//        | ((p, i, th) :: rest) ->
+//            let pcum = pcum + p
+//            if r < pcum then (ptotal, i, th) 
+//            else selection r ptotal pcum rest
+
+//    fun paths curpath T choices ->
+//        let mutable ptotal, wtotal, i = 0., 0., -1
+
+//        let wch =
+//            [ for (p, t) in choices do
+//                ptotal <- ptotal + p
+//                i <- i + 1
+//                let skip, w = testPath paths (i :: curpath)
+//                if not skip then 
+//                    let pw = (p * w) ** (1. / T)
+//                    wtotal <- wtotal + pw
+//                    yield pw, i, t ]
+
+//        let r = random.NextDouble(0., wtotal) (* 0<=r<ptotal *)
+//        selection r ptotal 0.0 wch
+//let sample_distb prevtabu maxTemperature maxdepth (selector) (sample_runner) (ch:ProbabilitySpace<_>) =
+//    let paths = defaultArg prevtabu (Dict<int32 list, float>())
+//    let useTemperature = maxTemperature > 1. 
+//    let gainT = maxTemperature ** (1./200.)
+//    let attenT = maxTemperature ** (-1./10.)
+//    let mutable T = 1.
+
+//    let look_ahead curpath pcontrib (ans,j,acc) = function (* explore the branch a bit *)
+//    | (p,Value v) -> 
+//        propagateUp paths 0.5 0.2 (j::curpath)
+//        if useTemperature then T <- min maxTemperature (T * attenT)
+//        insertWithx (+) v (p * pcontrib) ans, j + 1, acc
+//    | (p,Continued (Lazy t)) -> 
+//        match (t)  with
+//        | [] -> 
+//            propagateUp paths 0.5 -0.2 (j::curpath)
+//            paths.ExpandElseAdd (j::curpath) (fun _ -> -1.0) -1.0
+//            if useTemperature then T <- min maxTemperature (T * gainT)
+//            (ans, j + 1, (acc:(float * ProbabilitySpace<_>) list))
+//        | [(p1,Value v)] ->
+//            propagateUp paths 0.5 0.2 (j::curpath)
+//            if useTemperature then T <- min maxTemperature (T * attenT)
+//            (insertWithx (+) v (p * p1 * pcontrib) ans, j + 1, acc)
+//        | ch ->
+//            let ptotal = List.fold (fun pa (p,_) -> pa + p) 0.0 ch 
+//            (ans, j + 1,
+//              if ptotal < nearly_one then
+//                (p * ptotal, List.map (fun (p,x) -> (p / ptotal,x)) ch)::acc 
+//              else (p, ch)::acc)        
+//    let rec loop (curpath : int32 list) depth pcontrib (ans:Dict<_,_>) = function
+//    | [(p,Value v)]  -> 
+//        propagateUp paths 0.5 0.2 curpath
+//        if useTemperature then T <- min maxTemperature (T * attenT)
+//        insertWithx (+) v (p * pcontrib) ans
+//    | []         -> 
+//        propagateUp paths 0.5 -0.2 curpath
+//        paths.ExpandElseAdd curpath (fun _ -> -1.0) -1.0
+//        if useTemperature then T <- min maxTemperature (T * gainT)
+//        ans
+//    | [(p,Continued (Lazy th))] -> loop curpath (depth+1) (p * pcontrib) ans (th)
+//    | ch when depth < maxdepth -> (* choosing one thread randomly *)    
+//        match List.fold (look_ahead curpath pcontrib) (ans,0,[]) ch with
+//        | (ans,_,[]) -> ans
+//        | (ans,_,cch) -> 
+//           let (ptotal,i,th:ProbabilitySpace<_>) = selector paths curpath T cch
+//           loop (i::curpath) (depth+1) (pcontrib * ptotal) ans th  
+//    | _ -> ans    
+//    let toploop pcontrib ans cch = (* cch are already pre-explored *)
+//        let (ptotal,i,th) = selector paths [] T cch 
+//        loop [i] 0 (pcontrib * ptotal) ans th 
+//    let driver pcontrib vals cch =
+//        let (ans,nsamples) = 
+//             sample_runner (Dict()) (fun ans -> toploop pcontrib ans cch)  
+//        let ns = float nsamples   
+//        for (KeyValue(v,p)) in vals do  
+//            insertWithx (+) v (ns * p) ans |> ignore
+//        printfn "sample_importance: done %d worlds\n" nsamples;     
+//        [for (KeyValue(v,p)) in ans -> p/ns, Value v]
+//    let rec make_threads depth pcontrib ans ch =  (* pre-explore initial threads *)
+//        match List.fold (look_ahead [] pcontrib) (ans,0,[]) ch with
+//        | (ans,_,[]) -> (* pre-exploration solved the problem *) 
+//          [for (KeyValue(v,p)) in ans -> p, Value v]
+//        | (ans,_,[(p,ch)]) when depth < maxdepth -> (* only one choice, make more *)
+//           make_threads (depth+1) (pcontrib * p) ans ch
+//          (* List.rev is for literal compatibility with an earlier version *)
+//        | (ans,_,cch) -> driver pcontrib ans (List.rev cch) 
+//    make_threads 0 1.0 (Dict()) ch : ProbabilitySpace<_> 
+
+
+//let sample_importanceN4 (maxtime : _ option) selector lowp d maxdpeth nsamples
+//    thunk =
+//    let t0 = DateTime.Now 
+//    let rec loop th z =
+//        function
+//        | 0 -> (z, nsamples)
+//        | _ when maxtime.IsSome
+//                 && (DateTime.Now - t0).TotalSeconds > maxtime.Value ->
+//            (z, nsamples)
+//        | n -> loop th (th z) (n - 1)
+//    sample_distb lowp maxdpeth selector (fun z th -> loop th z nsamples)
+//        (shallow_explore d (reify0 thunk))
+
+    //static member ImportanceSampleExplore(thunk, nsamples, maxdepth,
+    //                                      ?lowprobBranchExploreProbability,
+    //                                      ?maxtime, ?shallowExploreDepth,
+    //                                      ?selector) =
+    //    sample_importanceN4 maxtime (defaultArg selector random_selector)
+    //        (defaultArg lowprobBranchExploreProbability 0.1)
+    //        (defaultArg shallowExploreDepth 3) maxdepth nsamples (thunk)
+    //static member SampleBreadth(space, niters, maxdepth,?maxwidth, ?lookaheadWidth,  
+    //                            ?beamwidth, ?maxTemperature,
+    //                            ?maxtime, ?state) =
+    //    best_first_sample_dist maxtime state (defaultArg maxwidth 16.) maxdepth 
+    //        (defaultArg beamwidth 8) (defaultArg lookaheadWidth 32)
+    //        (defaultArg maxTemperature 0.) niters space

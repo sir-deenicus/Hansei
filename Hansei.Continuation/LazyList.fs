@@ -149,12 +149,23 @@ module LazyList =
         | CellCons(a,b) -> if p a then Some a else tryFind p b
         | CellEmpty -> None
 
+
     let indexNotFound() = raise (new System.Collections.Generic.KeyNotFoundException("An index satisfying the predicate was not found in the collection"))
 
     let find p s1 =
         match tryFind p s1 with
         | Some a -> a
         | None   -> indexNotFound()
+
+    let exists p s1 =
+        match tryFind p s1 with
+        | Some _ -> true
+        | None  -> false
+ 
+    let rec forall p s1 =
+        match getCell s1 with
+        | CellEmpty -> true
+        | CellCons(a,b) -> if p a then forall p b else false
 
     let rec scan f acc s1 =
       lzy(fun () ->
@@ -232,6 +243,14 @@ module LazyList =
                 loop s xs
         loop s l
 
+    let reduce f l = 
+        match getCell l with
+        | CellEmpty -> invalidArg "l" "the list is empty"
+        | CellCons (x, xs) -> 
+            match getCell xs with
+            | CellEmpty -> x            
+            | CellCons(x2, rest) -> fold f (f x x2) rest
+
     let mapAccum f s l =
         let rec loop s l cont =
             match  getCell l with
@@ -293,7 +312,7 @@ module LazyList =
 
     let (|Cons|Nil|) l = match getCell l with CellCons(a,b) -> Cons(a,b) | CellEmpty -> Nil  
     
-    let (|Singleton|) x = match x with Cons(a, Nil) -> Some a | _ -> None
+    let (|Singleton|_|) x = match x with Cons(a, Nil) -> Some a | _ -> None
 
     let rev r =
         let rec revAux r acc =
@@ -341,28 +360,62 @@ module LazyList =
         | None -> empty
         | Some x -> ofList [x]
 
+        
+    let maxBy f l =
+        let rec find fb b = function 
+            | Nil -> b 
+            | Singleton x -> if f x > fb then x else b
+            | Cons(x,xs) -> 
+                let b' = f x 
+                if b' > fb then find b' x xs else find fb b xs 
+        
+        match l with 
+        | Nil -> invalidArg "l" "the list is empty"
+        | Singleton x -> x
+        | Cons(x,xs) -> find (f x) x xs 
 
-    module ComputationExpression =
-        type LazyListMonad() =
-            member __.Bind(m, f) = map f m |> concat
-            member __.Return x = singleton x
-            member __.ReturnFrom l = l : LazyList<_>
-            member __.Zero() = empty
-            member __.Combine(x,y) = append x y
-            member __.Delay(f: unit -> LazyList<_>) = delayed f 
-            member __.MergeSources(xs,ys) = 
-                concat (map (fun x -> map (fun y -> (x,y)) ys) xs) 
-            member l.Yield x = l.Return x
-            member ll.YieldFrom l = ll.ReturnFrom l
+    let minBy f l =
+        let rec find fb b = function
+            | Nil -> b
+            | Singleton x -> if f x < fb then x else b
+            | Cons (x, xs) ->
+                let b' = f x
 
-        let lzlist = LazyListMonad()
+                if b' < fb then find b' x xs
+                else find fb b xs
+
+        match l with
+        | Nil -> invalidArg "l" "the list is empty"
+        | Singleton x -> x
+        | Cons (x, xs) -> find (f x) x xs    
+        
+    let sort (l: _ LazyList) = Seq.sort l |> ofSeq 
     
-        let lazyList = lzlist
+    let sortDescending (l: _ LazyList) = Seq.sortDescending l |> ofSeq
+    
+    let sortBy f (l: _ LazyList) = Seq.sortBy f l |> ofSeq
 
-        let guard assertion = lzlist { if assertion then return () }  
+    let inline sortByDescending f (l: _ LazyList) = Seq.sortByDescending f l |> ofSeq
+            
+         
+    type LazyListMonad() =
+        member __.Bind(m, f) = map f m |> concat
+        member __.Return x = singleton x
+        member __.ReturnFrom l = l : LazyList<_>
+        member __.Zero() = empty
+        member __.Combine(x,y) = append x y
+        member __.Delay(f: unit -> LazyList<_>) = delayed f 
+        member __.MergeSources(xs,ys) = 
+            concat (map (fun x -> map (fun y -> (x,y)) ys) xs) 
+        member l.Yield x = l.Return x
+        member ll.YieldFrom l = ll.ReturnFrom l
 
-    open ComputationExpression
+    let lzlist = LazyListMonad()
+    
+    let lazyList = lzlist
 
+    let guard assertion = lzlist { if assertion then return () }  
+      
     let rec choice (l1: LazyList<_>) (l2: LazyList<_>) =
         lzlist {
             match l1 with
@@ -383,3 +436,11 @@ module LazyList =
         }
 
     let removeDuplicatesOfSeq xs = xs |> ofSeq |> removeDuplicates 
+
+    module ComputationExpressions =
+        let lzlist = lzlist
+    
+        let lazyList = lzlist
+
+        let guard assertion = guard assertion 
+

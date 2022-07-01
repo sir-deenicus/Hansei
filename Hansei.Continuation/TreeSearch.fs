@@ -30,7 +30,7 @@ module Backtracking =
 module LazyList =
     open Hansei.FSharpx.Collections
     let choices xs = LazyList.ofSeq xs
-    let guard b = LazyList.ComputationExpression.guard b
+    let guard b = LazyList.ComputationExpressions.guard b
     let constrain = guard
-    let search = LazyList.ComputationExpression.LazyListMonad() 
+    let search = LazyList.LazyListMonad() 
     let exactly x = choices [x]

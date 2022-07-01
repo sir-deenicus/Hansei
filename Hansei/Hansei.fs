@@ -5,8 +5,9 @@ open Hansei.Utils
 open Prelude.Common
 open Prelude.Math 
 open System
-open Prelude.Math
-open Utils.Sampling
+open Prelude.Math 
+open Hansei.FSharpx.Collections 
+open Hansei.FSharpx.Collections.LazyList.ComputationExpressions
 
 //open FSharp.Collections.ParallelSeq
 
@@ -19,212 +20,170 @@ open Utils.Sampling
 //This framework is much more flexible than the system described in Expert F#. 
 //A continuation monad is used to describe distributions as lazy continuation trees (lazily generated nested lists).
 //Better base for http://dippl.org 
- 
-//==========
-
-type ProbabilitySpace<'T> = list<float * WeightedTree<'T>>
+  
+type ProbabilitySpace<'T> = LazyList<WeightedTree<'T> * float>
 and WeightedTree<'T> = 
     | Value of 'T 
-    | Continued of Lazy<ProbabilitySpace<'T>>    
+    | Continued of Lazy<ProbabilitySpace<'T>>       
+        
+//if use value instead of Continued, infinite computations will fail to return/terminate
+let distribution_of_lazy ch = 
+    LazyList.map (fun (v, p) -> Continued(lazy(LazyList.ofList [Value v, 1.])), p) ch : ProbabilitySpace<_> 
 
-type ProbabilityContinuation<'a,'b> = 'a -> ProbabilitySpace<'b>
+let distribution ch = distribution_of_lazy (LazyList.ofList ch) : ProbabilitySpace<_>  
+  
+let always x = distribution_of_lazy (LazyList.singleton (x,1.)) : ProbabilitySpace<_> 
 
-type ProbSearchResult<'T> =
-    {Values : list<float * 'T>
-     Continuation : ProbabilitySpace<'T>
-     Paths : Dict<int32 list, float>}
+let exactly x = distribution [x, 1.] 
 
+let fail () = LazyList.empty : ProbabilitySpace<_>  
+  
 let reflect tree k =  
     let rec make_choices pv = 
-        List.map (function 
-          | (p, Value x) -> (p, Continued(lazy(k x)))
-          | (p, Continued(Lazy x)) -> (p, Continued(lazy(make_choices x)))) pv
-        
-    make_choices tree  : ProbabilitySpace<_> 
-
-let variable_elim reify f arg zz = reflect (reify (f arg)) zz    
+        LazyList.map (function 
+        | (Value x, p) -> Continued(lazy(k x)), p
+        | (Continued(Lazy t), p) -> Continued(lazy(make_choices t)), p) pv 
+    make_choices tree : ProbabilitySpace<_>  
     
-let distribution ch (k:ProbabilityContinuation<_,_>) = List.map (fun (p,v) -> (p, Continued(lazy(k v)))) ch : ProbabilitySpace<_>
+type ProbabilitySpaceBuilder() =
+    member inline d.Bind(space, k) = reflect space k
+    member d.Return v = always v
+    member d.ReturnFrom vs = vs : ProbabilitySpace<_> 
+    member d.Zero () = always ()  
+    member __.Combine(x,y) = LazyList.choice x y
+    member __.Delay(f: unit -> LazyList<_>) = LazyList.delayed f 
+    member l.Yield x = l.Return x  
+     
+let dist = ProbabilitySpaceBuilder()
+  
+let observe test = dist { if not test then return! fail() } : ProbabilitySpace<_> 
 
-let fail () = distribution []
+let constrain test = dist { if not test then return! fail() } : ProbabilitySpace<_> 
 
-let observe test = cont { if not test then return! fail() }
+let softConstrainOn r = dist { if random.NextDouble() > r then return! fail() } : ProbabilitySpace<_> 
 
-let constrain test = cont { if not test then return! fail() }
-
-let softConstrainOn r = cont { if random.NextDouble() > r then return! fail() }
-
-let filterDistribution f p = cont {
+let filterDistribution f p = dist {
     let! x = p
     do! observe (f x)
     return x
-}   
-
-let inline reify0 (m:ProbabilityContinuation<_,_> -> 'b) = m (fun x -> [(1.0, Value x)] : ProbabilitySpace<_>)
-
-let exactly x = distribution [1., x] 
+}    
 
 let explore (maxdepth: int option) (choices: ProbabilitySpace<'T>) =
     let rec loop p depth down susp answers =
         match (down, susp, answers) with
-        | (_, [], answers) -> answers
-        | (_, (pt, Value v) :: rest, (ans, susp)) -> 
+        | _, LazyList.Nil, answers -> answers
+        | _, LazyList.Cons((Value v, pt), rest), (ans, susp) -> 
             loop p depth down rest (insertWithx (+) v (pt * p) ans, susp) 
-        | (true, (pt, Continued (Lazy t)) :: rest, answers) ->
+        | true, LazyList.Cons((Continued (Lazy t), pt), rest), answers ->
             let down' =
-                match maxdepth with
-                | Some x -> depth < x
-                | None -> true
-            loop p depth true rest
-            <| loop (pt * p) (depth + 1) down' (t) answers
+                Option.map (fun x -> depth < x) maxdepth 
+                |> Option.defaultValue true   
+             
+            loop (pt * p) (depth + 1) down' t answers
+            |> loop p depth true rest 
 
-        | (down, (pt, c) :: rest, (ans, susp)) -> loop p depth down rest (ans, (pt * p, c) :: susp)
-
-    //let (ans, susp) = loop 1.0 0 true choices (Map.empty, [])
+        | (down, LazyList.Cons((c, pt), rest), (ans, susp)) -> 
+            loop p depth down rest (ans, (c, pt * p) :: susp)
+             
     let (ans, susp) = loop 1.0 0 true choices (Dict(), [])
 
-    //Map.fold (fun a v p -> (p, Value v)::a) susp ans : ProbabilitySpace<'T>
+    //Map.fold (fun a v p -> (p, Value v)::a) susp ans : ProbabilitySpace<'T> 
     [ yield! susp
-      for (KeyValue (v, p)) in ans -> p, Value v ]: ProbabilitySpace<_>   
+      for (KeyValue (v, p)) in ans -> Value v, p ]  
       
-let exploreb (maxdepth : int option) (choices : ProbabilitySpace<'T>) =
-  let rec loop p depth down susp answers =
-    match (down, susp, answers) with
-    | (_, [], answers) -> answers 
- 
-    | (_, (pt, Value v) :: rest, (ans, susp)) ->
-      loop p depth down rest (insertWithx (+) v (pt*p) ans, susp)
- 
-    | (true, (pt,Continued (Lazy t))::rest, answers) ->
-      let down' = match maxdepth with Some x -> depth < x | None -> true
-      loop p depth true rest <| loop (pt*p) (depth+1) down' (t) answers
- 
-    | (down, (pt,c)::rest, (ans,susp)) ->
-      loop p depth down rest (ans, (pt*p,c)::susp)
+let lazy_explore (maxdepth: int option) (choices: ProbabilitySpace<'T>) =  
+    let rec loop p depth down susp answers = lazyList {
+        match (down, susp, answers) with
+        | _, LazyList.Nil, answers -> yield answers
+        | _, LazyList.Cons((Value v, pt), rest), (ans, susp) -> 
+            yield! loop p depth down rest (insertWithx (+) v (pt * p) ans, susp) 
+        | true, LazyList.Cons((Continued (Lazy t), pt), rest), answers ->
+            let down' =
+                Option.map (fun x -> depth < x) maxdepth 
+                |> Option.defaultValue true   
+             
+            let! answers = loop (pt * p) (depth + 1) down' t answers
+            yield! loop p depth true rest answers
+            
+        | (down, LazyList.Cons((c, pt), rest), (ans, susp)) -> 
+            yield! loop p depth down rest (ans, (c, pt * p) :: susp)
+    }
 
-  //let (ans, susp) = loop 1.0 0 true choices (Map.empty, [])
-  let (ans,susp) = loop 1.0 0 true choices (Dict(), [])  
-  //Map.fold (fun a v p -> (p, Value v)::a) susp ans : ProbabilitySpace<'T>
-  [ yield! susp
-    for (KeyValue(v,p)) in ans -> p, Value v] : ProbabilitySpace<_>
-     
+    lazyList { 
+        let! (ans, susp) = loop 1.0 0 true choices (Dict(), [])
+
+        //Map.fold (fun a v p -> (p, Value v)::a) susp ans : ProbabilitySpace<'T> 
+        yield! LazyList.ofList [for (KeyValue (v, p)) in ans -> Value v, p ]  
+        yield! LazyList.ofList susp 
+    }
+      
 let nearly_one = 1.0 - 1e-7;
 
 (* Explore but do not flatten the tree: 
    perform exact inference to the given depth
    We still pick out all the produced answers and note the failures. *)
      
-let shallow_explore maxdepth (choices : ProbabilitySpace<_>) =
+let shallow_explore (subsample : bool -> ProbabilitySpace<_> -> ProbabilitySpace<_>) restrictSubsample (maxdepth:int) (choices: ProbabilitySpace<_>) =
     let add_answer pcontrib v mp = insertWithx (+) v pcontrib mp
 
     let rec loop pc depth ans acc =
         function
-        | [] -> (ans, acc)
+        | LazyList.Nil -> (ans, acc)
         | _ when maxdepth = -1 -> (ans, acc)
-        | (p, Value v) :: rest ->
-            loop pc depth (add_answer (p * pc) v ans) acc rest
-        | c :: rest when depth >= maxdepth -> loop pc depth ans (c :: acc) rest
-        | (p, Continued(Lazy t)) :: rest ->
-            let (ans, ch) = loop (pc * p) (depth + 1) ans [] t
-            let ptotal = List.fold (fun pa (p, _) -> pa + p) 0.0 ch
+        | LazyList.Cons ((Value v, p), rest) -> loop pc depth (add_answer (p * pc) v ans) acc rest
+        | LazyList.Cons (c, rest) when depth >= maxdepth -> loop pc depth ans (c :: acc) rest
+        | LazyList.Cons ((Continued (Lazy t), p), rest) ->
+            let (ans, ch) = loop (pc * p) (depth + 1) ans [] (subsample restrictSubsample t)
+            let ptotal = List.fold (fun pa (_, p) -> pa + p) 0.0 ch
 
             let acc =
                 if ptotal = 0.0 then acc
                 else if ptotal < nearly_one then
-                    (p * ptotal,
-                     let ch = List.map (fun (p, x) -> (p / ptotal, x)) ch
-                     Continued(lazy ch))
-                    :: acc
-                else (p, Continued(lazy ch)) :: acc
+                    (let ch' = ch |> List.map (fun (x, p) -> x, p / ptotal) |> LazyList.ofList
+                     Continued(lazy ch'), p * ptotal) :: acc
+                else
+                    (Continued(lazy (LazyList.ofList ch)), p) :: acc
+
             loop pc depth ans acc rest
 
-    let (ans, susp) = loop 1.0 0 (Dict()) [] choices
-    [ yield! susp
-      for (KeyValue(v, p)) in ans -> p, Value v ] : ProbabilitySpace<_>
+    let (ans, susp) = loop 1.0 0 (Dict()) [] (subsample restrictSubsample choices)
+    LazyList.ofList
+        [ yield! susp
+          for (KeyValue (v, p)) in ans -> Value v, p ]
 
+
+///(* Explore the tree till we find the first s
 
 ///(* Explore the tree till we find the first success -- the first leaf
 ///   (V v) -- and return the resulting tree. If the tree turns out to
 ///   have no leaves, return the empty tree. *) 
-let rec first_success maxdepth = function
-    | [] -> [] : ProbabilitySpace<_>
-    | _ when maxdepth = 0 -> [] 
-    | ((_,Value _) :: _) as l  -> 
-    l |> List.groupBy snd 
-        |> List.map (fun (v, ps) -> List.sumBy fst ps, v)
-    | (pt,Continued (Lazy t)) :: rest -> (* Unclear: expand and do BFS *)
-        first_success (maxdepth - 1) (rest @ List.map (fun (p,v) -> (pt * p,v)) t)
-       
-//This sampler takes after beam search or even breadth first search
-//when the width is high enough.
-let best_first_sample_dist (maxtime : _ option) prevtabu maxdepth maxTemperature
-    niters space = 
-    let t0 = System.DateTime.Now
-    let paths = defaultArg prevtabu (Dict<int32 list, float>())
-    let useTemperature = maxTemperature > 1. 
-    let gainT = maxTemperature ** (1./200.)
-    let gainLiteT = maxTemperature ** (1./300.)
-    let attenT = maxTemperature ** (-1./10.)
-    let mutable T = 1. 
-    let discreteSampler ps =
-        Stats.discreteSample
-            (Array.normalize [| for (p, w, _) in ps -> (p * w)**(1./T) |])  
-
-    let fch curpath ch =
-        List.mapi (fun i (p, t) ->
-            let pass, w = testPath paths (i :: curpath)
-            if pass then 0., 0., t else p, w, t) ch
-    let update curpath ans (pcontrib : float) = function 
-        | p, Value v ->
-            if not (paths.ContainsKey curpath) then
-                //propagateUp paths 0.5 0.1 curpath
-                paths.ExpandElseAdd curpath (fun _ -> -1.0) -1.0
-                if useTemperature then T <- max 1. (T * attenT)
-                Utils.insertWithx (+) v (p * pcontrib) ans |> ignore
-            true 
-        | _ -> false  
-    let rec loop (curpath : int32 list) maxd depth pcontrib ans =
-        function
-        | []  -> 
-            //propagateUp paths 0.5 -0.1 curpath
-            paths.ExpandElseAdd curpath (fun _ -> -1.0) -1.0
-            if useTemperature then T <- min maxTemperature (T * gainT) 
-        | [ x ] -> update (0::curpath) ans pcontrib x |> ignore
-        | _ when depth > maxdepth
-                 || (maxtime.IsSome
-                     && (DateTime.Now - t0).TotalSeconds > maxtime.Value) ->
-            if useTemperature then T <- min maxTemperature (T * gainLiteT) 
-        | [ p, Continued(Lazy th) ] -> loop curpath maxd (depth + 1) (p * pcontrib) ans th
-        | ch -> 
-            let branches =
-                let mutable i = -1
-                [ for c in ch do    
-                    i <- i + 1
-                    if not (update (i::curpath) ans pcontrib c) then yield c] 
-
+let rec first_success maxdepth =
+    function
+    | LazyList.Nil -> Seq.empty
+    | _ when maxdepth = 0 -> Seq.empty
+    | LazyList.Cons ((Value _, _), _) as l ->
+        l
+        |> Seq.groupBy fst
+        |> Seq.map (fun (v, ps) -> v, Seq.sumBy snd ps)
+        
+    | LazyList.Cons ((Continued (Lazy t), pt), rest) -> (* Unclear: expand and do BFS *)
+        first_success (maxdepth - 1) (LazyList.append rest (LazyList.map (fun (v, p) -> v, pt * p) t))
+        
+let inline first_success_rnd maxdepth ch = 
+    let rec loop maxdepth = function
+        | LazyList.Nil -> None
+        | _ when maxdepth = 0 -> None
+        | LazyList.Cons((Value _, _), _) as l -> 
             let choices =
-                sampleN_No_ReplacementsX discreteSampler 1 (fch curpath branches) 
-            for (b, (p, _, t)) in choices do
-                if p <> 0. then
-                    loop (b :: curpath) maxd (depth + 1) (pcontrib) ans [ p, t ] 
-        | _ -> ()
-
-    let rec sampler (ch : ProbabilitySpace<'T>) ans =
-        function
-        | 0 ->
-            let t1 = System.DateTime.Now
-            printfn "done %d worlds\nTime taken: %A seconds" niters
-                (round 3 ((t1 - t0).TotalSeconds))
-            { Values =
-                  [ for (KeyValue(v, p)) in ans -> p, v ]
-              Continuation = ch
-              Paths = paths }
-        | n ->
-            loop [] maxdepth 0 1. ans ch
-            sampler ch ans (n - 1)
-
-    sampler (reify0 space) (Dict()) niters
-     
+                [|for (v, p) in l do 
+                    match v with
+                    | Value x -> yield (x, p)
+                    | _ -> () |] 
+            if choices.Length = 0 then None else Some(Array.sampleOne choices)
+        | LazyList.Cons((Continued (Lazy t), pt), rest) -> (* Unclear: expand and do BFS *)
+            loop (maxdepth - 1) (LazyList.append rest (LazyList.map (fun (v, p) -> (v, pt * p)) t))
+    loop maxdepth ch    
+    
 (* ------------------------------------------------------------------------ *)
 (*	Approximate inference strategies:				                        *)
 (*  Trace a few paths from the root to a leaf of the search tree            *)
@@ -235,361 +194,360 @@ let best_first_sample_dist (maxtime : _ option) prevtabu maxdepth maxTemperature
 (* Naive, rejection sampling: the baseline *)        
 (* Random selection from a list of choices, using system randomness *)
 
-let max_selector choices = List.maxBy fst choices  
+let max_selector choices = LazyList.maxBy snd choices  
 
-let random_selector =  
-  let rec selection r ptotal pcum = function
-      | [] -> failwith "Choice selection: can't happen"
-      | ((p,th)::rest) -> 
-        let pcum = pcum + p  
-        if r < pcum then (ptotal,th)
-        else selection r ptotal pcum rest
-
-  fun choices ->
-      let ptotal = List.sumBy fst choices  
-      let r = random.NextDouble (0., ptotal)      (* 0<=r<ptotal *)
-      selection r ptotal 0.0 choices
-  
-let random_selector2 =
-    let rec selection r ptotal pcum =
-        function
-        | [] -> failwith "Choice selection: can't happen"
-        | ((p, i, th) :: rest) ->
-            let pcum = pcum + p
-            if r < pcum then (ptotal, i, th) 
+let random_selector dosort =  
+    let rec selection r ptotal pcum = function
+        | LazyList.Nil -> failwith "Choice selection: can't happen"
+        | LazyList.Cons((th, p), rest) -> 
+            let pcum = pcum + p  
+            if r < pcum then (th, ptotal)
             else selection r ptotal pcum rest
 
-    fun paths curpath T choices ->
-        let mutable ptotal, wtotal, i = 0., 0., -1
+    fun choices ->
+        let ptotal = LazyList.fold (fun pa (_, p) -> pa + p) 0. choices  
+        let r = random.NextDouble (0., ptotal)      (* 0<=r<ptotal *)
+        
+        if dosort then LazyList.sortBy snd choices
+        else choices
+        |> selection r ptotal 0.0 
 
-        let wch =
-            [ for (p, t) in choices do
-                ptotal <- ptotal + p
-                i <- i + 1
-                let skip, w = testPath paths (i :: curpath)
-                if not skip then 
-                    let pw = (p * w) ** (1. / T)
-                    wtotal <- wtotal + pw
-                    yield pw, i, t ]
 
-        let r = random.NextDouble(0., wtotal) (* 0<=r<ptotal *)
-        selection r ptotal 0.0 wch
-  
+let random_selector_list dosort =  
+    let rec selection r ptotal pcum = function
+        | [] -> failwith "Choice selection: can't happen"
+        | (th, p) :: rest -> 
+            let pcum = pcum + p  
+            if r < pcum then (th, ptotal)
+            else selection r ptotal pcum rest
 
-let rejection_sample_dist selector nsamples ch =    
+    fun choices ->
+        let ptotal = List.fold (fun pa (_, p) -> pa + p) 0. choices  
+        let r = random.NextDouble (0., ptotal)      (* 0<=r<ptotal *)
+        
+        if dosort then List.sortBy snd choices
+        else choices
+        |> selection r ptotal 0.0 
+
+      
+let rejection_sample selector subsample nsamples ch =    
     let t0 = System.DateTime.Now
     
-    let rec loop pcontrib ans = function
-        | ([(p,Value v)] :ProbabilitySpace<_>) -> insertWith (+) v (p * pcontrib) ans
-        | []         -> ans
-        | [(p,Continued (Lazy th))] -> loop (p * pcontrib) ans (th)
+    let rec loop depth pcontrib ans = function
+        | LazyList.Singleton (Value v, p) -> insertWithx (+) v (p * pcontrib) ans
+        | LazyList.Nil         -> ans
+        | LazyList.Singleton (Continued (Lazy th), p) -> loop (depth + 1) (p * pcontrib) ans th
         | ch ->
-            let (ptotal,th) = selector (ch)
-            loop (pcontrib * ptotal) ans [(1.0,th)] 
+            let (th, ptotal) = selector (subsample true ch)
+            loop (depth + 1) (pcontrib * ptotal) ans (LazyList.singleton (th, 1.0))
 
     let rec driver (ch:ProbabilitySpace<_>) ans = function
         | 0 -> let ns = float nsamples 
                let t1 = System.DateTime.Now
                printfn "rejection_sample: done %d worlds\nTime taken: %A seconds" nsamples (round 3 ((t1 - t0).TotalSeconds))
-               Map.fold (fun a v p -> (p / ns,Value v)::a) [] ans : ProbabilitySpace<_>
+               //Map.fold (fun a v p -> (p / ns,Value v)::a) [] ans : ProbabilitySpace<_>
+               [ for (KeyValue (v, p)) in ans -> Value v, p / ns]
               
-        | n -> driver ch (loop 1.0 ans ch) (n-1) 
-    driver (reify0 ch) Map.empty nsamples  : 'a ProbabilitySpace
-                          
-let sample_dist maxdepth (selector) (sample_runner) (ch:ProbabilitySpace<_>) =
-    let look_ahead pcontrib (ans,acc) = function (* explore the branch a bit *)
-    | (p,Value v) -> (insertWithx (+) v (p * pcontrib) ans, acc)
-    | (p,Continued (Lazy t)) -> 
-        match (t)  with
-        | [] -> (ans,(acc:(float * ProbabilitySpace<_>) list))
-        | [(p1,Value v)] -> 
-           (insertWithx (+) v (p * p1 * pcontrib) ans, acc)
+        | n -> driver ch (loop 0 1.0 ans ch) (n-1) 
+    driver ch (Dict()) nsamples 
+
+let beam_search beamwidth ch =
+    let rec pop pcontrib =
+        function
+        | (Value _, _) as n -> LazyList.singleton n
+        | (Continued (Lazy t), p) ->
+            match t with
+            | LazyList.Nil -> LazyList.empty
+            | LazyList.Singleton (Value v, p1) -> LazyList.singleton (Value v, p * p1 * pcontrib)
+            | ch ->
+                LazyList.sortByDescending snd ch
+                |> LazyList.takeOrMax beamwidth
+
+
+    let rec loop depth pcontrib =
+        function
+        | LazyList.Singleton _ as leaf -> leaf
+        | LazyList.Nil -> LazyList.empty
+        | LazyList.Singleton (Continued (Lazy th), p) -> loop (depth + 1) (pcontrib * p) th
         | ch ->
-            let ptotal = List.fold (fun pa (p,_) -> pa + p) 0.0 ch 
-            (ans,
-              if ptotal < nearly_one then
-                (p * ptotal, List.map (fun (p,x) -> (p / ptotal,x)) ch)::acc 
-              else (p, ch)::acc)        
-    let rec loop depth pcontrib (ans:Dict<_,_>) = function
-    | [(p,Value v)]  -> insertWithx (+) v (p * pcontrib) ans
-    | []         -> ans
-    | [(p,Continued (Lazy th))] -> loop (depth+1) (p * pcontrib) ans (th)
-    | ch when depth < maxdepth -> (* choosing one thread randomly *)    
-        match List.fold (look_ahead pcontrib) (ans,[]) ch with
-        | (ans,[]) -> ans
-        | (ans,cch) ->
-           let (ptotal,th:ProbabilitySpace<_>) = selector cch 
-           loop (depth+1) (pcontrib * ptotal) ans th  
-    | _ -> ans    
-    let toploop pcontrib ans cch = (* cch are already pre-explored *)
-        let (ptotal,th) = selector cch 
-        loop 0 (pcontrib * ptotal) ans th 
+            let candidates =
+                LazyList.map (pop pcontrib) ch
+                |> LazyList.concat
+                |> LazyList.sortByDescending snd
+                |> LazyList.takeOrMax beamwidth
+
+            match
+                LazyList.tryFind
+                    (function
+                    | (Continued _, _) -> true
+                    | (Value _, _) -> false)
+                    candidates
+                with
+            | Some _ -> loop (depth + 1) pcontrib candidates
+            | None -> candidates
+
+    loop 0 1. ch
+
+        
+                          
+let sample_dist lazysubsample subsample maxdepth selector sample_runner (ch: ProbabilitySpace<_>) =
+    let look_ahead pcontrib (ans, acc) =
+        function (* explore the branch a bit *)
+        | (Value v, p) -> insertWithx (+) v (p * pcontrib) ans, acc
+        | (Continued (Lazy t), p) ->
+            match t with
+            | LazyList.Nil -> (ans, acc)
+            | LazyList.Singleton (Value v, p1) -> insertWithx (+) v (p * p1 * pcontrib) ans, acc
+            | _ch_ ->
+                let ch = lazysubsample true _ch_
+                let ptotal = LazyList.fold (fun pa (_, p) -> pa + p) 0.0 ch
+
+                (ans,
+                 if ptotal < nearly_one then
+                     (LazyList.map (fun (x, p) -> (x, p / ptotal)) ch, p * ptotal)
+                     :: acc
+                 else (ch, p) :: acc)
+
+    let rec loop depth pcontrib (ans: Dict<_, _>) =
+        function
+        | LazyList.Singleton (Value v, p) -> insertWithx (+) v (p * pcontrib) ans
+        | LazyList.Nil -> ans
+        | LazyList.Singleton (Continued (Lazy th), p) -> loop (depth + 1) (p * pcontrib) ans th
+        | ch when depth < maxdepth -> (* choosing one thread randomly *)
+            match LazyList.fold (look_ahead pcontrib) (ans, []) (lazysubsample false ch) with
+            | (ans, []) -> ans
+            | (ans, cch) ->
+                let (th: ProbabilitySpace<_>, ptotal) = selector cch
+                loop (depth + 1) (pcontrib * ptotal) ans th
+        | _ -> ans
+        
+    let toploop pcontrib ans cch =
+        (* cch are already pre-explored *)
+        let (th, ptotal) = selector (subsample 0 cch)
+        loop 0 (pcontrib * ptotal) ans th
+
     let driver pcontrib vals cch =
-        let (ans,nsamples) = 
-             sample_runner (Dict()) (fun ans -> toploop pcontrib ans cch)  
-        let ns = float nsamples  
-        //let ans = Map.fold (fun ans v p  -> insertWith (+) v (ns * p) ans) ans vals 
-        for (KeyValue(v,p)) in vals do  
+        let (ans, nsamples) = sample_runner (Dict()) (fun ans -> toploop pcontrib ans cch)
+        let ns = float nsamples
+        //let ans = Map.fold (fun ans v p  -> insertWith (+) v (ns * p) ans) ans vals
+        for (KeyValue (v, p)) in vals do
             insertWithx (+) v (ns * p) ans |> ignore
-        printfn "sample_importance: done %d worlds\n" nsamples;
-        //Map.fold (fun a v p -> (p / ns,Value v)::a) [] ans       
-        [for (KeyValue(v,p)) in ans -> p/ns, Value v]
-    let rec make_threads depth pcontrib ans ch =  (* pre-explore initial threads *)
-        match List.fold (look_ahead pcontrib) (ans,[]) ch with
-        | (ans,[]) -> (* pre-exploration solved the problem *) 
-          [for (KeyValue(v,p)) in ans -> p, Value v]
-        | (ans,[(p,ch)]) when depth < maxdepth -> (* only one choice, make more *)
-           make_threads (depth+1) (pcontrib * p) ans ch
-          (* List.rev is for literal compatibility with an earlier version *)
-        | (ans,cch) -> driver pcontrib ans (List.rev cch) 
-    make_threads 0 1.0 (Dict()) ch : ProbabilitySpace<_> 
 
-//let sample_distb prevtabu maxTemperature maxdepth (selector) (sample_runner) (ch:ProbabilitySpace<_>) =
-//    let paths = defaultArg prevtabu (Dict<int32 list, float>())
-//    let useTemperature = maxTemperature > 1. 
-//    let gainT = maxTemperature ** (1./200.)
-//    let attenT = maxTemperature ** (-1./10.)
-//    let mutable T = 1.
+        printfn "sample_importance: done %d worlds\n" nsamples
+        //Map.fold (fun a v p -> (p / ns,Value v)::a) [] ans
+        [ for (KeyValue (v, p)) in ans -> Value v, p / ns ]
 
-//    let look_ahead curpath pcontrib (ans,j,acc) = function (* explore the branch a bit *)
-//    | (p,Value v) -> 
-//        propagateUp paths 0.5 0.2 (j::curpath)
-//        if useTemperature then T <- min maxTemperature (T * attenT)
-//        insertWithx (+) v (p * pcontrib) ans, j + 1, acc
-//    | (p,Continued (Lazy t)) -> 
-//        match (t)  with
-//        | [] -> 
-//            propagateUp paths 0.5 -0.2 (j::curpath)
-//            paths.ExpandElseAdd (j::curpath) (fun _ -> -1.0) -1.0
-//            if useTemperature then T <- min maxTemperature (T * gainT)
-//            (ans, j + 1, (acc:(float * ProbabilitySpace<_>) list))
-//        | [(p1,Value v)] ->
-//            propagateUp paths 0.5 0.2 (j::curpath)
-//            if useTemperature then T <- min maxTemperature (T * attenT)
-//            (insertWithx (+) v (p * p1 * pcontrib) ans, j + 1, acc)
-//        | ch ->
-//            let ptotal = List.fold (fun pa (p,_) -> pa + p) 0.0 ch 
-//            (ans, j + 1,
-//              if ptotal < nearly_one then
-//                (p * ptotal, List.map (fun (p,x) -> (p / ptotal,x)) ch)::acc 
-//              else (p, ch)::acc)        
-//    let rec loop (curpath : int32 list) depth pcontrib (ans:Dict<_,_>) = function
-//    | [(p,Value v)]  -> 
-//        propagateUp paths 0.5 0.2 curpath
-//        if useTemperature then T <- min maxTemperature (T * attenT)
-//        insertWithx (+) v (p * pcontrib) ans
-//    | []         -> 
-//        propagateUp paths 0.5 -0.2 curpath
-//        paths.ExpandElseAdd curpath (fun _ -> -1.0) -1.0
-//        if useTemperature then T <- min maxTemperature (T * gainT)
-//        ans
-//    | [(p,Continued (Lazy th))] -> loop curpath (depth+1) (p * pcontrib) ans (th)
-//    | ch when depth < maxdepth -> (* choosing one thread randomly *)    
-//        match List.fold (look_ahead curpath pcontrib) (ans,0,[]) ch with
-//        | (ans,_,[]) -> ans
-//        | (ans,_,cch) -> 
-//           let (ptotal,i,th:ProbabilitySpace<_>) = selector paths curpath T cch
-//           loop (i::curpath) (depth+1) (pcontrib * ptotal) ans th  
-//    | _ -> ans    
-//    let toploop pcontrib ans cch = (* cch are already pre-explored *)
-//        let (ptotal,i,th) = selector paths [] T cch 
-//        loop [i] 0 (pcontrib * ptotal) ans th 
-//    let driver pcontrib vals cch =
-//        let (ans,nsamples) = 
-//             sample_runner (Dict()) (fun ans -> toploop pcontrib ans cch)  
-//        let ns = float nsamples   
-//        for (KeyValue(v,p)) in vals do  
-//            insertWithx (+) v (ns * p) ans |> ignore
-//        printfn "sample_importance: done %d worlds\n" nsamples;     
-//        [for (KeyValue(v,p)) in ans -> p/ns, Value v]
-//    let rec make_threads depth pcontrib ans ch =  (* pre-explore initial threads *)
-//        match List.fold (look_ahead [] pcontrib) (ans,0,[]) ch with
-//        | (ans,_,[]) -> (* pre-exploration solved the problem *) 
-//          [for (KeyValue(v,p)) in ans -> p, Value v]
-//        | (ans,_,[(p,ch)]) when depth < maxdepth -> (* only one choice, make more *)
-//           make_threads (depth+1) (pcontrib * p) ans ch
-//          (* List.rev is for literal compatibility with an earlier version *)
-//        | (ans,_,cch) -> driver pcontrib ans (List.rev cch) 
-//    make_threads 0 1.0 (Dict()) ch : ProbabilitySpace<_> 
+    let rec make_threads depth pcontrib ans ch =
+        (* pre-explore initial threads *)
+        match LazyList.fold (look_ahead pcontrib) (ans, []) (lazysubsample false ch) with
+        | (ans, []) -> (* pre-exploration solved the problem *) 
+            [ for (KeyValue (v, p)) in ans -> Value v, p ]
+        | (ans, [ch, p]) when depth < maxdepth -> (* only one choice, make more *)
+            make_threads (depth + 1) (pcontrib * p) ans ch 
+        | (ans, cch) -> driver pcontrib ans cch
+
+    make_threads 0 1.0 (Dict()) ch
+
 
 //=================
-///////////////////
-(* A selector from a list of choices relying on the non-determinism
-   supported by the parent reifier.
-*)
-let dist_selector ch =
-    let ptotal = List.fold (fun pa (p, _) -> pa + p) 0.0 ch
-    (ptotal, distribution (List.map (fun (p, v) -> (p / ptotal, v)) ch))
-
-let sample_importanceN3 selector d maxdpeth nsamples (thunk) =
+/////////////////// 
+let sample_importanceAux lazysubsample subsample selector d maxdpeth nsamples distr =
     let rec loop th samples =
         function 
         | 0 -> (samples, nsamples)
         | n -> loop th (th samples) (n - 1)
-    sample_dist maxdpeth selector (fun samples th -> loop th samples nsamples) 
-        (shallow_explore d (reify0 thunk))
+    sample_dist lazysubsample subsample maxdpeth selector (fun samples th -> loop th samples nsamples) 
+        (shallow_explore lazysubsample d distr)
 
-//let sample_importanceN4 (maxtime : _ option) selector lowp d maxdpeth nsamples
-//    thunk =
-//    let t0 = DateTime.Now 
-//    let rec loop th z =
-//        function
-//        | 0 -> (z, nsamples)
-//        | _ when maxtime.IsSome
-//                 && (DateTime.Now - t0).TotalSeconds > maxtime.Value ->
-//            (z, nsamples)
-//        | n -> loop th (th z) (n - 1)
-//    sample_distb lowp maxdpeth selector (fun z th -> loop th z nsamples)
-//        (shallow_explore d (reify0 thunk))
-
-let sample_importance maxdpeth nsamples (thunk) =
-    sample_importanceN3 random_selector 3 maxdpeth nsamples (thunk)
-             
-let inline exact_reify model = explore None (reify0 model)
-let inline limit_reify n model = explore (Some n) (reify0 model)
-
+let sample_importance lazysubsample subsampler sortBeforeSampling maxdpeth nsamples distr =
+    sample_importanceAux lazysubsample subsampler (random_selector_list sortBeforeSampling) 3 maxdpeth nsamples distr
+               
 type Model() =
-    static member ImportanceSample(thunk, nsamples, maxdepth, ?maxtime,
-                                   ?shallowExploreDepth, ?selector) =
-        sample_importanceN3 (defaultArg selector random_selector)
-            (defaultArg shallowExploreDepth 3) maxdepth nsamples (thunk)
-    //static member ImportanceSampleExplore(thunk, nsamples, maxdepth,
-    //                                      ?lowprobBranchExploreProbability,
-    //                                      ?maxtime, ?shallowExploreDepth,
-    //                                      ?selector) =
-    //    sample_importanceN4 maxtime (defaultArg selector random_selector)
-    //        (defaultArg lowprobBranchExploreProbability 0.1)
-    //        (defaultArg shallowExploreDepth 3) maxdepth nsamples (thunk)
-    //static member SampleBreadth(space, niters, maxdepth,?maxwidth, ?lookaheadWidth,  
-    //                            ?beamwidth, ?maxTemperature,
-    //                            ?maxtime, ?state) =
-    //    best_first_sample_dist maxtime state (defaultArg maxwidth 16.) maxdepth 
-    //        (defaultArg beamwidth 8) (defaultArg lookaheadWidth 32)
-    //        (defaultArg maxTemperature 0.) niters space
-    static member Reify(thunk, ?limit) =
-        match limit with
-        | None -> exact_reify thunk
-        | Some n -> limit_reify n thunk
+    static member ImportanceSamples(distr, nsamples, maxdepth, ?subsampler,?lazysubsample, ?sortBeforeSampling,
+        ?shallowExploreDepth, ?selector) =
+        sample_importanceAux
+            (defaultArg subsampler (fun _ d -> d))
+            (defaultArg lazysubsample (fun _ d -> d))
+            (defaultArg selector (random_selector_list (defaultArg sortBeforeSampling true)))
+            (defaultArg shallowExploreDepth 3)
+            maxdepth
+            nsamples
+            distr
 
-type ModelFrom<'a, 'b when 'b : comparison>(thunk : ('a -> ProbabilitySpace<'a>) -> ProbabilitySpace<'b>) =
-    member __.model = thunk
+    static member ExactInfer(distr, ?limit) = explore limit distr
 
-    member __.ImportanceSample(nsamples, maxdepth, ?maxtime,
-                                   ?shallowExploreDepth, ?selector) =
-        sample_importanceN3 (defaultArg selector random_selector) 
-            (defaultArg shallowExploreDepth 3) maxdepth nsamples (thunk)
+    static member RejectionSample (distr, nsamples,?sortBeforeSampling) =
+        rejection_sample (random_selector (defaultArg sortBeforeSampling true)) nsamples distr    
+        
     
-    member __.Reify(?limit) =
-        match limit with
-        | None -> exact_reify thunk
-        | Some n -> limit_reify n thunk
-    
-    member __.RejectionSample nsamples =
-        rejection_sample_dist random_selector nsamples thunk
+type ModelFrom<'a, 'b when 'b: comparison>(distr: ProbabilitySpace<'b>, ?subsampler, ?lazysubsampler) =
+    let subsample = defaultArg subsampler (fun _ d -> d)
+    let lazysubsample = defaultArg lazysubsampler (fun _ d -> d)
 
+    member __.model = distr
+
+    member __.ImportanceSample(nsamples, maxdepth, ?shallowExploreDepth, ?selector, ?sortBeforeSampling) =
+        sample_importanceAux
+            lazysubsample
+            subsample
+            (defaultArg selector (random_selector_list (defaultArg sortBeforeSampling true)))
+            (defaultArg shallowExploreDepth 3)
+            maxdepth
+            nsamples
+            distr
+
+    member __.ExactInfer(?limit) = explore limit distr
+
+    member __.RejectionSample(nsamples, ?sortBeforeSampling) =
+        rejection_sample (random_selector (defaultArg sortBeforeSampling true)) lazysubsample nsamples distr
+         
 //=-=-=-=-=-=-=-=-=-=
 
-module ProbabilitySpace =   
-    let inline expectedValue (ps) =
-        ps |> List.map (function (p, Value x) -> x * p | _ -> 0.) |> List.sum
+module ProbabilitySpace =  
 
-    let valueExtract = function Value x -> x | _ -> failwith "Not a value"
+    let inline getLargeProbItems maxp data =
+        let rec innerloop curritems cumulativeprob =
+            function
+            | LazyList.Nil -> curritems
+            | _ when cumulativeprob > maxp -> curritems
+            | LazyList.Cons((_, p) as item, ps) ->
+                innerloop (LazyList.cons item curritems) (p + cumulativeprob) ps
+        innerloop LazyList.empty 0. (Seq.sortByDescending snd data |> LazyList.ofSeq)
+        
+    let nucleusSamples k p probs =
+        let choices =
+            getLargeProbItems p probs 
+             
+        if k > 0 then
+            choices
+            |> LazyList.rev
+            |> LazyList.take k
+        else choices 
+        
+    let expectedValue f ps =
+        ps
+        |> List.map (function
+            | (Value x, p) -> f x * p
+            | _ -> 0.)
+        |> List.sum
 
-    let valueExtract2 = function Value x -> Some x | _ -> None
+    let extractValue =
+        function
+        | Value x -> x
+        | _ -> failwith "Not a value"
 
-    let printWith fp f x =  
-        List.map (function (p, Value x) -> fp p, f x | (p, Continued _) -> fp p, "...") x
-         
-    let mapValue f (p,v) = 
-        p, match v with Value x -> Value(f x) | _ -> failwith "error"
+    let tryExtractValue =
+        function
+        | Value x -> Some x
+        | _ -> None
+
+    let printWith fp f distr =
+        LazyList.map (function
+            | (Value x, p) -> f x, fp p
+            | (Continued _, p) -> "...", fp p) distr  
     
     let inline top l =
         l
-        |> List.sortByDescending fst 
+        |> List.sortByDescending snd 
         |> List.head
 
-    let best l =
-        l |> List.maxBy fst |> snd
+    let best l = l |> List.maxBy snd |> fst
 
+    let mapValues f l =
+        [ for (v, p) in l do
+            match v with
+            | Value x -> yield (Value(f x), p)
+            | _ -> yield (v, p) ]
+              
+    let mapValuesAndProb pf f l = 
+        [ for (v, p) in l do
+            match v with 
+            | Value x -> yield (f x, pf p)
+            | _ -> ()] 
+            
     let map f l = 
-        [for (p,v) in l do
+        [ for (v, p) in l do
             match v with 
-            | Value x -> yield (p, Value(f x))
-            | _ -> yield (p,v)]
-
-    let mapValuesProb fp f l = 
-        [for (p,v) in l do
-            match v with 
-            | Value x -> yield (fp p, (f x))
-            | _ -> ()]
-
-    let mapValues f l = 
-        [for (p,v) in l do
-            match v with 
-            | Value x -> yield (p, (f x))
-            | _ -> ()]
-
-    let inline mkProbabilityMap t =
-        Map [for (p, v) in (normalize t) do
-              match v with
-               | Value x -> yield (x,p)
-               | _ -> ()]     
+            | Value x -> yield (f x, p)
+            | _ -> ()] 
 
 module Distributions =                
 
-    let bernoulli p = distribution [(p, true); (1.0-p, false)]
+    let bernoulli p = distribution [(true, p); (false, 1.0-p)]
 
-    let bernoulliChoice p (a,b) = distribution [(p, a); (1.0-p, b)]
+    let bernoulliChoice p (a,b) = distribution [(a, p); (b, 1.0-p)]
                                                           
     let uniform (items:'a list) = 
         let num = float items.Length
-        distribution (List.map (fun item -> 1./num, item) items)
+        distribution (List.map (fun item -> item, 1./num) items)
 
-    let categorical distr = distribution distr 
+    let categorical distr = distribution (List.normalizeWeights distr)
 
     //=-=-=-=-=-=-=-=-=-=
 
-    let rec geometric n p = cont {
+    let rec geometric n p = dist {
         let! a = bernoulli p
-        if a then return n else return! (geometric(n+1) p)
-    }
-   
+
+        if a then return n
+        else return! (geometric (n + 1) p)
+    }   
+        
     ///polya's urn
-    let rec beta roundto draws a b = cont {
-        if draws <= 0 then return (round roundto (a/(a+b)))
-        else let! ball = categorical [a/(a+b),1;b/(a+b),2]
-             if ball = 1 then return! beta roundto (draws - 1) (a+1.) b
-             else return! beta roundto (draws-1) a (b+1.)
-    } 
+    let rec beta roundto draws a b = dist {
+        if draws <= 0 then
+            return (round roundto (a / (a + b)))
+        else
+            let! ball =
+                categorical [ 1, a / (a + b)
+                              2, b / (a + b) ]
 
-    let rec dirichlet3 roundto draws a b c = cont {
-        if draws <= 0 then return (Array.map (round roundto) [|a/(a+b+c);b/(a+b+c);c/(a+b+c)|])
-        else let! ball = categorical [a/(a+b+c),1;b/(a+b+c),2;c/(a+b+c),3]
-             if ball = 1 then return! dirichlet3 roundto (draws - 1) (a+1.) b c
-             elif ball = 2 then return! dirichlet3 roundto (draws - 1) a (b+1.) c
-             else return! dirichlet3 roundto (draws-1) a b (c+1.)
+            if ball = 1 then
+                return! beta roundto (draws - 1) (a + 1.) b
+            else
+                return! beta roundto (draws - 1) a (b + 1.)
+        }
+        
+    let rec dirichlet3 roundto draws a b c : ProbabilitySpace<_> = dist {
+        if draws <= 0 then
+            return
+                (Array.map
+                    (round roundto)
+                    [|  a / (a + b + c)
+                        b / (a + b + c)
+                        c / (a + b + c) |])
+        else
+            let! ball =
+                categorical [ 1, a / (a + b + c)
+                              2, b / (a + b + c)
+                              3, c / (a + b + c) ]
+
+            if ball = 1 then
+                return! dirichlet3 roundto (draws - 1) (a + 1.) b c
+            elif ball = 2 then
+                return! dirichlet3 roundto (draws - 1) a (b + 1.) c
+            else
+                return! dirichlet3 roundto (draws - 1) a b (c + 1.)
     }
 
-    let rec dirichlet roundto draws d =
-        cont {
-            let z = List.sum d
+    let rec dirichlet roundto draws d : ProbabilitySpace<_> = dist {
+        let t = List.sum d
 
-            if draws <= 0 then
-                return (List.map (fun a -> round roundto (a / z)) d)
-            else
-                let ps = List.mapi (fun i a -> (a / z), i) d
-                let! ball = categorical ps
+        if draws <= 0 then
+            return (List.map (fun a -> round roundto (a / t)) d)
+        else
+            let ps = List.mapi (fun i a -> i, (a / t)) d
+            let! ball = categorical ps
 
-                let d' =
-                    List.mapi (fun i a -> if i = ball then a + 1. else a) d
+            let d' = List.mapi (fun i a -> if i = ball then a + 1. else a) d
 
-                return! dirichlet roundto (draws - 1) d'
-        }  
+            return! dirichlet roundto (draws - 1) d'
+    }
+
     let discretizedSampler coarsener sampler (n: int) =
-        cont {
+        dist {
             return!
                 categorical (
-                    [ for _ in 1 .. n -> sampler () ]
+                    [ for _ in 1..n -> sampler () ]
                     |> coarsenWith coarsener
                 )
         }

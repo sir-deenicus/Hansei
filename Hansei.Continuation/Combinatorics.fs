@@ -82,12 +82,14 @@ let generatePossibilities alphabet n =
         }
     iterate [] n
 
-let powerset (items : _ []) =
+let powerset (items: _ []) =
     let n = items.Length
+
     seq {
         for bitpattern in generatePossibilities [ false; true ] n do
-            yield [| for i in 0..n - 1 do
-                        if bitpattern.[i] then yield items.[i] |]
+            yield
+                [| for i in 0 .. n - 1 do
+                    if bitpattern.[i] then yield items.[i] |]
     }
 
 let powersetSeq n (items : _ seq) =
@@ -95,8 +97,7 @@ let powersetSeq n (items : _ seq) =
     seq {
         for bitpattern in generatePossibilities [ false; true ] n do
             yield [| for i in 0..n - 1 do
-                        if bitpattern.[i] then
-                            yield LazyList.head (LazyList.skip i itemsList) |]
+                        if bitpattern.[i] then yield LazyList.head (LazyList.skip i itemsList) |]
     }
 
 
@@ -117,3 +118,65 @@ let combinationsMaxLen takeN items =
     |> Seq.map List.sort
     |> Seq.removeDuplicates
      
+
+module List =
+    //https://stackoverflow.com/questions/1526046/f-permutations
+    let rec internal distribute e = function
+    | [] -> [[e]]
+    | x::xs' as xs -> (e::xs)::[for xs in distribute e xs' -> x::xs]
+    
+    let rec permutations = function
+    | [] -> [[]]
+    | e::xs -> List.collect (distribute e) (permutations xs) 
+        
+    let combinations l =
+        permutations l 
+        |> List.map List.sort
+        |> List.removeDuplicates   
+
+module Array =
+    let permutations a = 
+        List.permutations (List.ofArray a) 
+        |> List.map List.toArray 
+        |> List.toArray
+
+    let combinations a =
+        List.combinations (List.ofArray a)
+        |> List.map List.toArray
+        |> List.toArray
+        
+    let permutedIndices (a:_[]) =
+        let perms = List.permutations [0..a.Length - 1]
+        [|for p in perms -> [|for i in p -> a[i]|]|] 
+        |> Array.removeDuplicates
+     
+
+module LazyList =
+    open LazyList.ComputationExpressions
+    
+    let rec distribute e =
+        function
+        | LazyList.Nil -> LazyList.singleton (LazyList.singleton e)
+
+        | LazyList.Cons (x, xs') as xs ->
+            LazyList.cons
+                (LazyList.cons e xs)
+                (lzlist {
+                    let! xs = distribute e xs'
+                    return LazyList.cons x xs
+                }) 
+ 
+    let rec permutations =
+        function
+        | LazyList.Nil -> LazyList.singleton LazyList.empty
+        | LazyList.Cons (e, xs) ->
+            LazyList.map (distribute e) (permutations xs)
+            |> LazyList.concat 
+        
+    let combinations l =
+        permutations l
+        |> LazyList.map LazyList.sort
+        |> LazyList.removeDuplicates
+
+        
+         
