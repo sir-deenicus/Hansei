@@ -9,7 +9,7 @@
     <Compile Include="DiscreteProb.fs" />
     <Compile Include="Rationals.fs" />
     <Compile Include="SymbolicProb.fs" />
-    <Compile Include="Hansei.Quantum.fs" />
+    <Compile Include="Quantum.fs" />
     <None Include="visualprobmonad.fsx" />
     <None Include="quantum-test.fsx" />
   </ItemGroup>

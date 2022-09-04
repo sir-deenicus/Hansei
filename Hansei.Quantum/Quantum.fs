@@ -39,10 +39,7 @@ open Prelude.Common
 //let explore (maxdepth : int option) (choices : QuantumProbabilitySpace<'T>) = 
 //    GenericProb.explore id (Complex 1Q) maxdepth choices
 //     : QuantumProbabilitySpace<'T>
-
-//let inline exact_reify model   =  explore None     (reify0 model)  
-//let inline limit_reify n model =  explore (Some n) (reify0 model)                   
-
+                
 //let normalize (choices:list<Complex * 'a>) =
 //    normalize (List.sumBy(fst >> Complex.magnitude >> squared) >> sqrt) choices
 
@@ -123,12 +120,6 @@ open Prelude.Common
 //      return (c,cnot c b)} 
 
 //////////
-
-//type Model() =  
-//    static member ReifyQuantum(thunk, ?limit) = 
-//        match limit with
-//        | None -> exact_reify thunk
-//        | Some n -> limit_reify n thunk
 
 //let measureReified (choices:list<Complex * _ >) =  
 //    List.map (fun (p, v) -> ((Complex.magnitude p) ** 2, valueExtract v)) choices

@@ -14,7 +14,7 @@ Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Solution Items", "Solution 
 		Obsolete.txt = Obsolete.txt
 	EndProjectSection
 EndProject
-Project("{F2A71F9B-5D33-465A-A702-920D77279786}") = "TesrtApp", "TesrtApp\TesrtApp.fsproj", "{DAB30CDA-75AA-41CF-9DD6-6EDFEE7A0C3F}"
+Project("{6EC3EE1D-3C4E-46DD-8F32-0CC8E7565705}") = "TestApp", "TesrtApp\TestApp.fsproj", "{DAB30CDA-75AA-41CF-9DD6-6EDFEE7A0C3F}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution

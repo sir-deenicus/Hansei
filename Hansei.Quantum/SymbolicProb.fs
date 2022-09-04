@@ -54,13 +54,3 @@ module ProbabilitySpace =
         ProbabilitySpace.expectedValue (fun i -> Vars.r[i]) f ps
 
   
-//let random_selector choices = random_selector (Expression.toFloat >> Option.get) 0Q choices
-
-//let rejection_sampler nsamples ch =
-//    rejection_sample_dist 1Q Expression.FromInt32 random_selector nsamples ch 
-
-//type Model() =  
-//    static member ReifySymbolic(thunk, ?limit) = 
-//        match limit with
-//        | None -> exact_reify thunk
-//        | Some n -> limit_reify n thunk
