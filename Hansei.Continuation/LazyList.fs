@@ -155,8 +155,8 @@ module LazyList =
     let find p s1 =
         match tryFind p s1 with
         | Some a -> a
-        | None   -> indexNotFound()
-
+        | None   -> indexNotFound() 
+         
     let exists p s1 =
         match tryFind p s1 with
         | Some _ -> true
@@ -165,7 +165,7 @@ module LazyList =
     let rec forall p s1 =
         match getCell s1 with
         | CellEmpty -> true
-        | CellCons(a,b) -> if p a then forall p b else false
+        | CellCons(head,rest) -> if p head then forall p rest else false
 
     let rec scan f acc s1 =
       lzy(fun () ->
@@ -201,7 +201,7 @@ module LazyList =
         else
           match getCell s with
           | CellCons(a,s) -> consc a (take (n-1) s)
-          | CellEmpty -> invalidArg "n" "not enough items in the list" )
+          | CellEmpty -> invalidArg "n" "not enough items in the list" ) 
 
     let rec tryTake n s =
         if n < 0 then None
@@ -271,6 +271,10 @@ module LazyList =
           | CellCons(h,t) -> loop t (h::acc)
       loop s []
 
+    let takeList n s = take n s |> toList
+
+    let takeOrMaxList n s = takeOrMax n s |> toList
+
     let rec iter f s =
       match getCell s with
       | CellEmpty -> ()
@@ -288,6 +292,10 @@ module LazyList =
 
     let ofArray a = copyFrom 0 a
     let toArray s = Array.ofList (toList s)
+
+    let takeArray n s = take n s |> toArray
+
+    let takeOrMaxArray n s = takeOrMax n s |> toArray
 
     let rec lengthAux n s =
         match getCell s with

@@ -14,6 +14,8 @@ Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Solution Items", "Solution 
 		Obsolete.txt = Obsolete.txt
 	EndProjectSection
 EndProject
+Project("{F2A71F9B-5D33-465A-A702-920D77279786}") = "TesrtApp", "TesrtApp\TesrtApp.fsproj", "{DAB30CDA-75AA-41CF-9DD6-6EDFEE7A0C3F}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -32,6 +34,10 @@ Global
 		{E8B539B4-3082-49B9-B2F4-5A392620A5FC}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{E8B539B4-3082-49B9-B2F4-5A392620A5FC}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{E8B539B4-3082-49B9-B2F4-5A392620A5FC}.Release|Any CPU.Build.0 = Release|Any CPU
+		{DAB30CDA-75AA-41CF-9DD6-6EDFEE7A0C3F}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{DAB30CDA-75AA-41CF-9DD6-6EDFEE7A0C3F}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{DAB30CDA-75AA-41CF-9DD6-6EDFEE7A0C3F}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{DAB30CDA-75AA-41CF-9DD6-6EDFEE7A0C3F}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

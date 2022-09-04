@@ -7,7 +7,7 @@ open System
 open Hansei.Core
 open Hansei.Utils
 open Hansei.Continuation
-open Hansei.Core.Distributions
+open Hansei.Core.Distributions 
 
 //This document is tests of modifications to allow Hansei to avoid unproductive paths by learning to weight certain paths, as apart from the underlying distribution.
 //The below is a modified version of random selector, it should allow sampling of unnormalized distributions.
@@ -209,53 +209,100 @@ let sample_importanceN nsamples thunk =
     sample_distb None 0. 100 random_selector3 (fun z th -> loop th z nsamples)
         (reify0 thunk) 
 
-let sample_dist maxdepth (selector) (sample_runner) (ch:ProbabilitySpace<_>) =
+let sample_dist maxdepth (selector) nsamples (ch:ProbabilitySpace<_>) =
     let look_ahead pcontrib (ans,acc) = function (* explore the branch a bit *)
-    | (p,Value v) -> (insertWithx (+) v (p * pcontrib) ans, acc)
+    | (p,Value v) -> 
+        printfn "In Lookahead. Item:%A" v
+        (insertWithx (+) v (p * pcontrib) ans, acc)
     | (p,Continued (Lazy t)) -> 
         match (t)  with
-        | [] -> (ans,(acc:(float * ProbabilitySpace<_>) list))
-        | [(p1,Value v)] -> 
+        | [] -> 
+            printfn "In Lookahead. Empty"
+            (ans,(acc:(float * ProbabilitySpace<_>) list))
+        | [(p1,Value v)] as ch -> 
+           printfn "In Continued singleton %A" ch
            (insertWithx (+) v (p * p1 * pcontrib) ans, acc)
         | ch ->
+            //printfn "%A" ch
+            printfn "Generic ch %A" ch
             let ptotal = List.fold (fun pa (p,_) -> pa + p) 0.0 ch 
             (ans,
               if ptotal < nearly_one then
                 (p * ptotal, List.map (fun (p,x) -> (p / ptotal,x)) ch)::acc 
               else (p, ch)::acc)        
     let rec loop depth pcontrib (ans:Dict<_,_>) = function
-    | [(p,Value v)]  -> insertWithx (+) v (p * pcontrib) ans
+    | [(p,Value v)]  -> 
+        printfn "%A" (v,p)
+        insertWithx (+) v (p * pcontrib) ans
     | []         -> ans
     | [(p,Continued (Lazy th))] -> loop (depth+1) (p * pcontrib) ans (th)
     | ch when depth < maxdepth -> (* choosing one thread randomly *)    
-        match List.fold (look_ahead pcontrib) (ans,[]) ch with
+        let res = List.fold (look_ahead pcontrib) (ans,[]) ch
+        printfn "res = %A" res
+        match res with
         | (ans,[]) -> ans
         | (ans,cch) ->
            let (ptotal,th:ProbabilitySpace<_>) = selector cch 
            loop (depth+1) (pcontrib * ptotal) ans th  
     | _ -> ans    
-    let toploop pcontrib ans cch = (* cch are already pre-explored *)
-        let (ptotal,th) = selector cch 
+    //let toploop pcontrib ans cch = (* cch are already pre-explored *)
+    //    let (ptotal,th) = selector cch 
+    //    loop 0 (pcontrib * ptotal) ans th 
+    let toploop pcontrib cch ans =
+        (* cch are already pre-explored *)
+        let (ptotal, th) = selector cch
         loop 0 (pcontrib * ptotal) ans th 
+    let rec sample_runner samples th =
+        function 
+        | 0 -> samples
+        | n -> sample_runner (th samples) th (n - 1)
+
     let driver pcontrib vals cch =
-        let (ans,nsamples) = 
-             sample_runner (Dict()) (fun ans -> toploop pcontrib ans cch)  
-        let ns = float nsamples  
-        //let ans = Map.fold (fun ans v p  -> insertWith (+) v (ns * p) ans) ans vals 
-        for (KeyValue(v,p)) in vals do  
+        let ans = sample_runner (Dict()) (toploop pcontrib cch) nsamples
+        let ns = float nsamples
+        //let ans = Map.fold (fun ans v p  -> insertWith (+) v (ns * p) ans) ans vals
+        for (KeyValue (v, p)) in vals do
             insertWithx (+) v (ns * p) ans |> ignore
-        printfn "sample_importance: done %d worlds\n" nsamples;
-        //Map.fold (fun a v p -> (p / ns,Value v)::a) [] ans       
-        [for (KeyValue(v,p)) in ans -> p/ns, Value v]
+
+        printfn "sample_importance: done %d worlds\n" nsamples
+        //Map.fold (fun a v p -> (p / ns,Value v)::a) [] ans
+        [ for (KeyValue (v, p)) in ans -> p / ns , Value v ]
+        
+    //let driver pcontrib vals cch =
+    //    let (ans,nsamples) = 
+    //         sample_runner (Dict()) (fun ans -> toploop pcontrib ans cch)  
+    //    let ns = float nsamples  
+    //    //let ans = Map.fold (fun ans v p  -> insertWith (+) v (ns * p) ans) ans vals 
+    //    for (KeyValue(v,p)) in vals do  
+    //        insertWithx (+) v (ns * p) ans |> ignore
+    //    printfn "sample_importance: done %d worlds\n" nsamples;
+    //    //Map.fold (fun a v p -> (p / ns,Value v)::a) [] ans       
+    //    [for (KeyValue(v,p)) in ans -> p/ns, Value v]
     let rec make_threads depth pcontrib ans ch =  (* pre-explore initial threads *)
-        match List.fold (look_ahead pcontrib) (ans,[]) ch with
+        printfn "going in look_ahead"
+        let res = List.fold (look_ahead pcontrib) (ans,[]) ch
+        printfn "res = %A" res
+        match res with
         | (ans,[]) -> (* pre-exploration solved the problem *) 
+          printfn "done"
           [for (KeyValue(v,p)) in ans -> p, Value v]
         | (ans,[(p,ch)]) when depth < maxdepth -> (* only one choice, make more *)
+           printfn "make_threads"
            make_threads (depth+1) (pcontrib * p) ans ch
           (* List.rev is for literal compatibility with an earlier version *)
-        | (ans,cch) -> driver pcontrib ans (List.rev cch) 
+        | (ans,cch) -> 
+            printfn "going to driver"
+            driver pcontrib ans cch
     make_threads 0 1.0 (Dict()) ch : ProbabilitySpace<_> 
+
+cont {
+    let! a = bernoulli 0.999999
+    match a with 
+    | true -> return (a,1)
+    | false -> 
+        let! c = bernoulli 0.999999
+        return (c,0)
+} |> reify0 |> sample_dist  100 random_selector 10
 
 let sample_importanceNb nsamples (thunk) =
     let rec loop th z =
@@ -275,12 +322,6 @@ cont {
     let! b2 = bernoulli 0.5
     return b,b2
 } |> sample_importanceN 1000
-
-cont {
-    let! b = bernoulli 0.5
-    let! b2 = bernoulli 0.5
-    return b,b2
-} |> sample_importanceNb 1000
 
 (** 
 

@@ -1,4 +1,5 @@
 ﻿module Hansei.Backtracking
+open Hansei.FSharpx.Collections
 
 //The backtracking monad or fairstream concept is also Oleg's, copied from here: http://fortysix-and-two.blogspot.com/2009/09/simple-and-fair-backtracking.html
 //and like the probability monad of this library, leverages the power of lazy non-determinism. The backtracking monad also implements
@@ -29,6 +30,16 @@ let rec bind m f =
     | One a -> f a
     | Choice (a, r) -> choice id (f a) (Thunk(lazy (bind r f)))
     | Thunk (Lazy i) -> Thunk(lazy (bind i f)) 
+
+///rewrite bind to use continuation passing style
+///100% written by Copilot!! (Except I replaced (fun xs -> k xs) with k)
+let rec bindc k m f =
+    match m with
+    | Nil -> k Nil
+    | One a -> k (f a)
+    | Choice (a, r) -> choice k (f a) (Thunk(lazy (bindc k r f)))
+    | Thunk (Lazy i) -> k(Thunk(lazy (bindc k i f))) 
+
   
 module FairStream =
     let rec map f m =
@@ -124,48 +135,79 @@ module FairStream =
         | Thunk (Lazy i), l -> Thunk(lazy (map2 f i l))
         | l, Thunk (Lazy i) -> Thunk(lazy (map2 f l i))
 
-    let zip m1 m2 = map2 (fun a b -> a,b) m1 m2 
+    let zip m1 m2 = map2 (fun a b -> a,b) m1 m2  
+    
+    let rec filter f m = 
+        match m with
+        | Nil -> Nil
+        | Choice(a, Nil)
+        | One a -> if f a then m else Nil
+        | Choice (a, r) -> 
+            if f a then Choice(a, Thunk(lazy (filter f r)))
+            else Thunk(lazy (filter f r))
+        | Thunk (Lazy i) -> Thunk(lazy (filter f i)) 
 
+    let rec concat (ls: LazyStream<LazyStream<'a>>) = 
+        match ls with 
+        | Nil -> Nil
+        | One a -> a
+        | Choice(a, Nil) -> a
+        | Choice (Nil, b) -> Thunk (lazy (concat b))
+        | Choice(a, b) ->  
+            Thunk (lazy (choice id a (concat b))) 
+        | Thunk (Lazy r) -> Thunk (lazy (concat r)) 
+
+    ///Warning!!! Must be Finite!!
     let fold f s ls =
-        let rec loop s l =
+        //Use CPS
+        let rec loop k s l =
             match l with
-            | Empty -> s
-            | Cons(x,xs) ->
-                let s = f s x
-                loop s xs
-        loop s ls
-
-    let merge xs ys = choice id xs ys
+            | Empty -> k s
+            | Cons (x, xs) -> loop (fun s' -> k (f s' x)) s xs 
+        loop id s ls 
 
 type FairStream() =
-    member __.Return a = One a
-    member __.ReturnFrom(x) = x
     member fs.YieldFrom x = fs.ReturnFrom x
     member __.Yield a = One a
-    member __.Bind(m, f) = bind m f
+    member __.Return a = One a
+    member __.ReturnFrom(x) = x 
+    member __.Bind(m, f) = bindc id m f
     member __.Zero() = Nil
-    member __.Combine(r, r') = choice id r r'
-    member __.Delay(f: unit -> LazyStream<_>) = Thunk(Lazy.Create f)
+    member __.Combine(r, r') = choice id r r'  
+    member __.Delay(f: unit -> LazyStream<_>) = Thunk(Lazy.Create f) 
+    member __.BindReturn(stream:LazyStream<'a>, f:'a->'b) =
+        FairStream.map f stream 
+    member __.BindReturn2(stream:LazyStream<'a>, stream2:LazyStream<'b>, f:'a->'b->'c) =
+        FairStream.map2 f stream stream2
     member __.MergeSources(xs, ys) =
         FairStream.map (fun x -> FairStream.map (fun y -> (x,y)) ys) xs 
-        |> FairStream.fold (choice id) Nil
+        |> FairStream.concat
 
-let bt = FairStream()
 
+let bt = FairStream() 
+    
 let rec run depth stream =
     match (depth, stream) with
-    | _, Nil -> Seq.empty
-    | _, One a -> seq { yield a }
-    | _, Choice (a, r) -> seq { yield a; yield! run depth r }
-    | 0, Thunk _ -> Seq.empty //exhausted depth
-    | d, Thunk (Lazy r) -> run (d - 1) r
+    | _, Nil -> LazyList.empty
+    | _, One a -> LazyList.singleton a
+    | _, Choice (a, r) ->
+        LazyList.lazyList {
+            yield a
+            yield! run depth r
+        }
+    //LazyList.cons a (run depth r)
+    | Some 0, Thunk _ -> LazyList.empty //exhausted depth
+    | d, Thunk (Lazy r) -> run (Option.map (fun n -> n - 1) d) r
 
 let guard assertion = bt { if assertion then return () }
- 
+
+///list to fairstream
 let choices xs =
-    let rec build xs = bt {
-        match xs with 
-        | [] -> () 
-        | x::xs' -> yield x; return! build xs'
-    } 
+    let rec build xs =
+        match xs with
+        | [] -> Nil
+        | [ x ] -> One x
+        | x :: xs -> Choice(x, Thunk(lazy (build xs)))
+
     build xs
+

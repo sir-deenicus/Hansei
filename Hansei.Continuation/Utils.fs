@@ -26,13 +26,13 @@ let insertWithx fn key item (d:Dict<_,_>) =
 //////////////////////////////////////
 
 let inline normalize (choices) =
-  let sum = List.sumBy fst choices
-  List.map (fun (p, v) -> (p/sum, v)) choices
+    let sum = List.sumBy snd choices
+    List.map (fun (v, p) -> (v, p/sum)) choices
+     
+let inline expectedValue f ps = 
+    ps
+    |> List.sumBy (fun (x,p) -> f x * p)
   
-let inline normalizeWeights data =
-    let sum = Array.sumBy snd data |> float
-    [|for (x,p) in data -> x, float p / sum|]  
-
 //////////////////////////////////////
 
 

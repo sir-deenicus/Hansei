@@ -14,7 +14,7 @@ open Hansei.FSharpx.Collections
 
 type SymbolicProbabilitySpace<'T> = GenericProbabilitySpace<'T, Expression>
  
-let distribution_of_lazy ch = distribution_of_lazy 1Q ch 
+let distribution_of_lazy ch = distributionOfLazy 1Q ch 
             
 let distribution ch = distribution_of_lazy (LazyList.ofList ch)  
   
@@ -48,6 +48,10 @@ module Distributions =
 let log0 x = if x = 0Q then 0Q else log x
 
 let toBits x = x / log 2Q  
+
+module ProbabilitySpace =
+    let inline expectedValue f ps =
+        ProbabilitySpace.expectedValue (fun i -> Vars.r[i]) f ps
 
   
 //let random_selector choices = random_selector (Expression.toFloat >> Option.get) 0Q choices

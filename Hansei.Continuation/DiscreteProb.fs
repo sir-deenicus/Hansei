@@ -146,7 +146,7 @@ module VisualProb =
         Seq.map (reducer isPenultimate) parts |> ResizeArray
 
     let inline mergeNodes (g:DirectedMultiGraph<_, _>) =
-        Array.iter (g.ModifyNodeEdges reduceNodeWeights) g.Vertices 
+        Array.iter (g.ModifyNodeEdges reduceNodeWeights) g.Vertices; g
       
     let inline buildGraph trackHistory soleLast normalizeJoint zero string probmonad =
         let preprocessed = Helper.processProbMonad string probmonad
@@ -185,11 +185,12 @@ module VisualProb =
         g
     
 
-    type GraphBuilder() =         
-        static member inline Render(probmonad, zero, ?TrackHistory, ?SoleLast, ?tostring, ?normalizeJoint) =
+    type GraphBuilder() =   
+        static member inline Render(probmonad, zero, ?MergeNodes, ?TrackHistory, ?SoleLast, ?tostring, ?normalizeJoint) =
             let trackHistory = defaultArg TrackHistory true 
             let soleLast = defaultArg SoleLast false
             let string = defaultArg tostring string
             let normalizejoint = defaultArg normalizeJoint false
             
-            buildGraph trackHistory soleLast normalizejoint zero string probmonad 
+            let g = buildGraph trackHistory soleLast normalizejoint zero string probmonad 
+            match MergeNodes with Some ture -> mergeNodes g | _ -> g
