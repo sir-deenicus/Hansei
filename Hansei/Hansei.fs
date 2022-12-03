@@ -29,7 +29,8 @@ and WeightedTree<'T> =
 
 //if use value instead of Continued, infinite computations will fail to return/terminate
 let distributionOfLazy weightedlist : ProbabilitySpace<_> =
-    LazyList.map (fun (v, p) -> Continued(lazy (LazyList.singleton (Value v, 1.))), p) weightedlist
+    LazyList.map (fun (v, p) -> 
+        Continued(lazy (LazyList.singleton (Value v, 1.))), p) weightedlist
 
 let distribution weightedlist : ProbabilitySpace<_> =
     distributionOfLazy (LazyList.ofList weightedlist)
@@ -55,24 +56,23 @@ type ProbabilitySpaceBuilder() =
     member inline d.Bind(space, k) = reflect space k
     member d.Return v = always v
     member d.ReturnFrom vs : ProbabilitySpace<_> = vs
-    member d.BindReturn(p: ProbabilitySpace<'a>, f: 'a -> 'b) : ProbabilitySpace<_> = reflect p (f >> always)
-    member d.Zero() = always ()
-    member __.Combine(x, y) = LazyList.choice x y
-    member __.Delay(f: unit -> LazyList<_>) = LazyList.delayed f
-    member l.Yield x = l.Return x
-
+    member d.BindReturn(p: ProbabilitySpace<'a>, f: 'a -> 'b) : ProbabilitySpace<_> = 
+        reflect p (f >> always)
+    member d.Zero() = LazyList.empty
+    member d.Combine(x, y) = LazyList.choice x y
+    member d.Delay(f: unit -> LazyList<_>) = LazyList.delayed f
+    member d.Yield x = d.Return x
+    
 let dist = ProbabilitySpaceBuilder()
 
 let observe test : ProbabilitySpace<_> =
-    dist { if not test then return! fail () }
+    dist {
+        if not test then
+            return! fail ()
+        else return ()
+    }
 
 let constrain test = observe test
-
-let softConstrainOn r : ProbabilitySpace<_> =
-    dist {
-        if random.NextDouble() > r then
-            return! fail ()
-    }
 
 module ProbabilitySpace =
     let filterDistribution f p =

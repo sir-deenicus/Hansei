@@ -161,7 +161,7 @@ module LazyList =
         | LazyList.Cons (x, xs') as xs ->
             LazyList.cons
                 (LazyList.cons e xs)
-                (lzlist {
+                (lazyList {
                     let! xs = distribute e xs'
                     return LazyList.cons x xs
                 }) 

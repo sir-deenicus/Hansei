@@ -40,19 +40,17 @@ module GenericProb =
         member inline d.Bind(space, k) = reflect space k
         member d.Return v = always one v
         member d.ReturnFrom vs = vs : GenericProbabilitySpace<_, _>  
-        member d.Zero () = always one ()  
+        member d.Zero () = LazyList.empty  
         member __.Combine(x,y) = LazyList.choice x y
         member __.Delay(f: unit -> LazyList<_>) = LazyList.delayed f 
         member l.Yield x = l.Return x  
      
     let dist one = GenericProbabilitySpaceBuilder(one)
 
-    let observe one test = dist one { if not test then return! fail () }  : GenericProbabilitySpace<_,'w>
+    let observe one test = dist one { if not test then return! fail () else return () }  : GenericProbabilitySpace<_,'w>
 
     let constrain one test = observe one test : GenericProbabilitySpace<_,'w>
     
-    let softConstrainOn one r = dist one { if random.NextDouble() > r then return! fail () }  : GenericProbabilitySpace<_,'w>
-
     let filterDistribution one f p : GenericProbabilitySpace<_,'w> = dist one {
         let! x = p
         do! observe one (f x)

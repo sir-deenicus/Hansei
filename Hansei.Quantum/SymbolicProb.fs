@@ -28,8 +28,6 @@ let observe test = observe 1Q test
 
 let constrain test = constrain 1Q test
     
-let softConstrainOn r = softConstrainOn 1Q r
-            
 let filterDistribution f p = filterDistribution 1Q f p
 
 let explore maxdepth choices = explore 1Q maxdepth choices

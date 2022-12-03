@@ -7,15 +7,15 @@ module Exhaustive =
     let choices xs = List.ofSeq xs 
     let exactly x = choices [x]  
 
-    type SearchMonad() =
-       member __.Bind        (m, f)  = List.collect f m
-       member __.Return      x       = [x]
-       member __.ReturnFrom  l       = l : _ list
-       member __.Zero        ()      = []
-       member __.Combine     (l1,l2) = List.append l1 l2
-       member __.Delay(f) = f ()
+    type ListMonad() =
+       member __.Bind(m, f) = List.collect f m
+       member __.Return x = [x]
+       member __.ReturnFrom l = l : _ list
+       member __.Zero () = []
+       member __.Combine(l1,l2) = List.append l1 l2
+       member __.Delay f = f ()
 
-    let search = SearchMonad()
+    let search = ListMonad()
     let guard assertion = search { if assertion then return () }  
 
 
@@ -30,7 +30,7 @@ module Backtracking =
 module LazyList =
     open Hansei.FSharpx.Collections
     let choices xs = LazyList.ofSeq xs
-    let guard b = LazyList.ComputationExpressions.guard b
+    let guard b = LazyList.guard b
     let constrain = guard
     let search = LazyList.LazyListMonad() 
     let exactly x = choices [x]

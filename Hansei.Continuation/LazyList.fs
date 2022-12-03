@@ -404,8 +404,7 @@ module LazyList =
     let sortBy f (l: _ LazyList) = Seq.sortBy f l |> ofSeq
 
     let inline sortByDescending f (l: _ LazyList) = Seq.sortByDescending f l |> ofSeq
-            
-         
+             
     type LazyListMonad() =
         member __.Bind(m, f) = map f m |> concat
         member __.Return x = singleton x
@@ -418,14 +417,12 @@ module LazyList =
         member l.Yield x = l.Return x
         member ll.YieldFrom l = ll.ReturnFrom l
 
-    let lzlist = LazyListMonad()
-    
-    let lazyList = lzlist
+    let lazyList = LazyListMonad() 
 
-    let guard assertion = lzlist { if assertion then return () }  
+    let guard assertion = lazyList { if assertion then return () }  
       
     let rec choice (l1: LazyList<_>) (l2: LazyList<_>) =
-        lzlist {
+        lazyList {
             match l1 with
             | Nil -> return! l2
             | Cons (h, Nil) -> return! (cons h l2)
@@ -436,7 +433,7 @@ module LazyList =
 
     let removeDuplicates (xs: LazyList<'a>) =
         let memory = Hashset()
-        lzlist { 
+        lazyList { 
             let! x = xs 
             if not (memory.Contains x) then
                 memory.Add x |> ignore 
@@ -445,10 +442,7 @@ module LazyList =
 
     let removeDuplicatesOfSeq xs = xs |> ofSeq |> removeDuplicates 
 
-    module ComputationExpressions =
-        let lzlist = lzlist
-    
-        let lazyList = lzlist
-
+    module ComputationExpressions =  
+        let lazyList = lazyList 
         let guard assertion = guard assertion 
 

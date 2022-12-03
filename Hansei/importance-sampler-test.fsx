@@ -7,7 +7,7 @@
 #r "netstandard" 
 #r @"dictionaryslim\1.0.0\lib\netstandard2.1\DictionarySlim.dll"
 #r @"Prelude\Prelude\bin\Release\netstandard2.1\Prelude.dll"
-
+#time "on"
 open Prelude.Math
 open Prelude.Common
 open System
@@ -16,34 +16,52 @@ open Hansei.Utils
 open Hansei.Continuation
 open Hansei.Core.Distributions
 open Hansei.FSharpx.Collections  
- 
+open Hansei.TreeSearch.Backtracking 
 open Hansei.Backtracking
-  
+
 let lazy_explore (choices: ProbabilitySpace<'T>) =  
     let rec loop p choices = LazyList.lazyList {
         match choices with
         | LazyList.Nil -> () 
         | LazyList.Cons((Value v, pt), rest) -> 
-            yield (v, log pt + p)
+            yield (v, exp (log pt + p))
             yield! loop p rest
         | LazyList.Cons((Continued (Lazy t), pt), rest) -> 
-            yield! loop (log pt + p) (LazyList.choice t rest) 
+            yield! LazyList.choice (loop (log pt + p) t) (loop p rest) 
     }
-        
+     
     loop 0. choices 
       
 
-open Hansei.TreeSearch.Backtracking
+let rec infd cs = search {
+    let! c = choices [0..16]
+    let cs' = c :: cs
+    do! guard (cs'.Length <= 3)
+    if cs'.Length = 3 then
+        yield cs'
+    return! infd cs'
+}   
 
-let rec infd ls = search {
-    let! a = choices [0..16]
-    let ls' = a :: ls
-    do! guard (ls'.Length <= 3)
-    yield ls'
-    return! infd ls'
+let rec infdp ls = dist {
+    let! a = uniform [0..16]
+    let cs' = a :: ls
+    do! observe (cs'.Length <= 3) 
+    if cs'.Length = 3 then 
+        yield cs'
+    return! infdp cs'
 }   
 
 
+let infbitsp bits = 
+    let rec build d xs = dist {
+        if d >= bits then return xs
+        else
+            let! a = uniform [0;1]  
+            return! build (d + 1) (a::xs)
+    }    
+    
+    build 0 []
+ 
 let infbits bits = 
     let rec build d xs = search {
         if d >= bits then return xs
@@ -54,6 +72,13 @@ let infbits bits =
     
     build 0 []
 
+dist {
+    let! b1 = bernoulli 0.5 
+    let! b2 = bernoulli 0.5 
+    do! observe (b1 || b2 = true)
+    return (b2)
+} |> explore None |> normalize
+
 let intArrayToBytes (i) =
     let s = i |> Array.map string |> String.concat "" 
     Convert.ToByte(s, 2)
@@ -63,10 +88,16 @@ infbits 9
 |> LazyList.takeOrMaxArray 20
 |> Array.map (List.toArray >> Array.split_TakeN_atATime 3 >> Array.map intArrayToBytes)
 
-#time 
+infbitsp 3 
+|> lazy_explore
+|> LazyList.takeOrMaxList 3
+
+ 
+infdp []
+|> lazy_explore 
+|> LazyList.takeOrMaxList 3
 
 infd [] 
-|> FairStream.filter (fun (l) -> l.Length = 3)
 |> run None 
 |> LazyList.takeList 40
 

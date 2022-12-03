@@ -19,10 +19,12 @@ module ListProb =
     let inline always one x = [ x, one ]
 
     type DistributionBuilder<'T>(one : 'T) =
-        member inline d.Bind(dist, f) = bind dist f |> aggregate
+        member inline d.Bind(dist, f) = f |> bind dist |> aggregate
         member d.Return v = always one v
         member d.ReturnFrom vs = vs
-        member d.Zero() = always one ()
+        member d.Zero() = []
+        member d.Combine(l1,l2) = List.append l1 l2
+        member d.Delay f = f ()
 
         member inline d.MergeSources(xs: list<'item * 'number>, ys: list<'item * 'number>) =
             [ for (x, p) in xs do
@@ -42,7 +44,7 @@ module ListProb =
     let inline bernoulliChoice one a b p = [ a, p; b, one - p ]
      
     let observe one test =
-        dist one { if not test then return! fail () }
+        dist one { if not test then return! fail () else return ()}
          
 
     module Float =
@@ -61,19 +63,21 @@ module VisualProb =
         [ for (x, p) in dist do
               for (y, p2) in k x do
                   yield (y, p @ p2 ) ]
-
-    let fail() = []
+                   
     let inline bernoulli one p = [true, [p]; false, [one - p]]
     let inline uniform ofInt one l = l |> List.map (fun x -> x, [one/ofInt l.Length])
-    let categorical l = l |> List.map (fun (x,p) -> x, [p])
     let inline bernoulliChoice one a b p = [a,[p];b,[one - p]]
     let inline always one x = [x,[one]]
+    let categorical l = l |> List.map (fun (x,p) -> x, [p])
+    let fail() = []
 
     type DistributionBuilder<'T>(one:'T) =
         member inline d.Bind(dist, f) = bind dist f
         member d.Return v = always one v
         member d.ReturnFrom vs = vs
-        member d.Zero () = always one ()
+        member d.Zero () = []
+        member d.Combine(l1,l2) = List.append l1 l2
+        member d.Delay f = f ()
         member inline d.MergeSources(xs: list<'item * 'number list>, ys: list<'item * 'number list>) =
             [ for (x, p) in xs do
                 for (y, p2) in ys do
@@ -81,7 +85,7 @@ module VisualProb =
 
     let dist one = DistributionBuilder(one)
 
-    let observe one test = dist one {if not test then return! fail()}
+    let observe one test = dist one {if not test then return! fail() else return ()}
 
     module Float =
         let dist = dist 1.
