@@ -16,8 +16,8 @@
     <None Include="original-sampler.txt" />
     <None Include="history.txt" />
     <None Include="importance-sampler-test.fsx" />
+    <Compile Include="Hansei-lazy-list.fs" />
     <Compile Include="Hansei.fs" />
-    <Compile Include="Hansei-list.fs" />
   </ItemGroup>
 
   <ItemGroup>
