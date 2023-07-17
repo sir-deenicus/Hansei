@@ -416,7 +416,12 @@ module LazyList =
             concat (map (fun x -> map (fun y -> (x,y)) ys) xs) 
         member l.Yield x = l.Return x
         member ll.YieldFrom l = ll.ReturnFrom l
-
+        member __.BindReturn(stream:LazyList<'a>, f:'a->'b) =
+                map f stream
+                
+        member __.BindReturn2(stream:LazyList<'a>, stream2:LazyList<'b>, f:'a->'b->'c) =
+            map2 f stream stream2
+                 
     let lazyList = LazyListMonad() 
 
     let guard assertion = lazyList { if assertion then return () }  
@@ -440,9 +445,9 @@ module LazyList =
                 return x
         }
 
-    let removeDuplicatesOfSeq xs = xs |> ofSeq |> removeDuplicates 
+    let removeDuplicatesOfSeq xs = xs |> ofSeq |> removeDuplicates  
 
     module ComputationExpressions =  
-        let lazyList = lazyList 
+        let lazyList = lazyList //work around for Required qualified access for LazyLists
         let guard assertion = guard assertion 
-
+         

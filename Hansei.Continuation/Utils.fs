@@ -17,11 +17,10 @@ let insertWith fn key item m =
     | None -> Map.add key item m  
 
 let insertWithx fn key item (d:Dict<_,_>) = 
-    match d.tryFind key with
+    match d.TryFind key with
     | Some v' -> d.[key] <- (fn item v') 
     | None -> d.Add(key, item)
-    d
-
+    d 
 
 //////////////////////////////////////
 

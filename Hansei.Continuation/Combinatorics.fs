@@ -154,7 +154,7 @@ module Array =
 module LazyList =
     open LazyList.ComputationExpressions
     
-    let rec distribute e =
+    let rec private distribute e =
         function
         | LazyList.Nil -> LazyList.singleton (LazyList.singleton e)
 
