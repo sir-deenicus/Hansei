@@ -184,10 +184,6 @@ module FairStream =
 
     let combine l1 l2 = choice id l1 l2
 
-    let product xs ys =
-        map (fun x -> map (fun y -> (x, y)) ys) xs
-        |> concat
-
     let ofList xs =
         let rec build xs =
             match xs with
@@ -219,6 +215,9 @@ module FairStream =
 
         build xs
 
+    let cartesianProduct xs ys = //as either stream might be infinite, we are forced to use bind
+        bindc id xs (fun x -> bindc id ys (fun y -> One(x, y)))
+
 
 type FairStream() =
     member fs.YieldFrom x = fs.ReturnFrom x
@@ -233,9 +232,6 @@ type FairStream() =
 
     member __.BindReturn2(stream: LazyStream<'a>, stream2: LazyStream<'b>, f: 'a -> 'b -> 'c) =
         FairStream.map2 f stream stream2
-
-    member __.MergeSources(xs, ys) = FairStream.product xs ys
-         
 
 let bt = FairStream()
 

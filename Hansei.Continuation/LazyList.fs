@@ -404,7 +404,7 @@ module LazyList =
     let sortBy f (l: _ LazyList) = Seq.sortBy f l |> ofSeq
 
     let inline sortByDescending f (l: _ LazyList) = Seq.sortByDescending f l |> ofSeq
-             
+              
     type LazyListMonad() =
         member __.Bind(m, f) = map f m |> concat
         member __.Return x = singleton x
@@ -412,6 +412,7 @@ module LazyList =
         member __.Zero() = empty
         member __.Combine(x,y) = append x y
         member __.Delay(f: unit -> LazyList<_>) = delayed f 
+        member __.For(m, f) = concat (map f m)
         member __.MergeSources(xs,ys) = 
             concat (map (fun x -> map (fun y -> (x,y)) ys) xs) 
         member l.Yield x = l.Return x
@@ -446,6 +447,13 @@ module LazyList =
         }
 
     let removeDuplicatesOfSeq xs = xs |> ofSeq |> removeDuplicates  
+
+    let cartesianProduct (xs: LazyList<'a>) (ys: LazyList<'b>) =
+        lazyList {
+            for x in xs do
+                for y in ys do
+                    yield (x, y)
+        }
 
     module ComputationExpressions =  
         let lazyList = lazyList //work around for Required qualified access for LazyLists
