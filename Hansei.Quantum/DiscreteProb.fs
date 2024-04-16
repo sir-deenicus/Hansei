@@ -2,6 +2,7 @@
 
 open MathNet.Numerics  
 open MathNet.Symbolics
+open MathNet.Symbolics.NumberProperties
 
 open ListProb
 
@@ -15,7 +16,8 @@ module VisualProb =
         let constrain = observe
         let bernoulli p = bernoulli 1Q p
         let bernoulliChoice a b p = bernoulliChoice 1Q a b p
-        let always x = always 1Q x
+        let always x = always 1Q x 
+        let uniformPrior (n:int) baseps = uniformPrior (float >> Expression.fromFloat64) 1Q baseps
 
 module ListProb = 
 
@@ -27,6 +29,7 @@ module ListProb =
         let bernoulli p = bernoulli 1N p
         let bernoulliChoice a b p = bernoulliChoice 1N a b p
         let always x = always 1N x
+        let uniformPrior (n:int) baseps = uniformPrior (decimal >> BigRational.FromDecimal) 1N baseps
  
     module Symbolic =
         let dist = dist 1Q
@@ -39,3 +42,4 @@ module ListProb =
         let bernoulli p = bernoulli 1Q p
         let bernoulliChoice a b p = bernoulliChoice 1Q a b p
         let always x = always 1Q x
+        let uniformPrior (n:int) baseps = uniformPrior (float >> Expression.fromFloat64) 1Q baseps

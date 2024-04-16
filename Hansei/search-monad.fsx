@@ -1,12 +1,14 @@
 ﻿#load @"C:\users\cybernetic\jupyter-notebooks\maths-repl.fsx"
 #time "on"
-open Prelude.Common
 open Prelude.Math
+open Prelude.Common
 open System
-open MathNet.Symbolics.Utils 
-open Hansei.FSharpx.Collections.LazyList.ComputationExpression 
+open MathNet.Symbolics.Utils  
 open Hansei.FSharpx.Collections 
 open Hansei.Backtracking
+open Hansei.TreeSearch
+
+open Hansei.TreeSearch.LazyList
 
 (** 
 parent(sarah, john).
@@ -16,81 +18,148 @@ parent(john, anne).
 grandparent(Person, Grandchild) :- parent(Person, X), parent(X, Grandchild).
 
 grandparent(sarah, anne).
-grandparent(arnold, anne).
+grandparent(arnold, anne).*)
 
- parents =  LazyList.ofList ["Sarah", "John"; "Arnold", "John"; "John", "Anne"]
+let parentChildPairs =  choices ["Sarah", "John"; "Arnold", "John"; "John", "Anne"]
 
-lzlist {
-    let! p, c = parents
-    let! c', g = parents
-    do! guard (c = c' && g = "Anne")
-    return p
+search {
+    let! parent, child = parentChildPairs
+    let! parentOfGrandchild, grandchild = parentChildPairs
+    do! guard (child = parentOfGrandchild && grandchild = "Anne")
+    return parent
 }
-|> LazyList.take 2
+|> Hansei.Backtracking.run None 
 |> LazyList.toArray 
 
-[ for p, c in parents do
-      for c', g in parents do
-          if c = c' && g = "Anne" then yield p ]*)
+[ for parent, child in [ "Sarah", "John"; "Arnold", "John"; "John", "Anne" ] do
+      for parentOfGrandchild, grandchild in [ "Sarah", "John"; "Arnold", "John"; "John", "Anne" ] do
+          if child = parentOfGrandchild && grandchild = "Anne" then
+              yield parent ]
 
 let letters = List.removeDuplicates (List.ofSeq "SENDMOREMONEY")
 
-//let digits = choices [0..9]
-let digits = LazyList.ofList [0..9]
-//let choices = LazyList.ofList 
-        
-//lzlist {
-//    let m = 1
-//    let! s = choices [ 2 .. 9 ]
-//    let! e = digits
-//    do! guard (Hashset([ s; e; m ]).Count = 3) 
-//    let! n = digits
-//    do! guard (Hashset([ s; e; n; m ]).Count = 4)
-//    let! d = digits
-//    do! guard (Hashset([ s; e; n; d; m ]).Count = 5)
-//    let! o = digits
-//    do! guard (Hashset([ s; e; n; d; m; o ]).Count = 6)
-//    let! r = digits
-//    do! guard (Hashset([ s; e; n; d; m; o; r ]).Count = 7)
-//    let! y = digits
-//    do! guard (Hashset([ s; e; n; d; m; o; r; y ]).Count = 8)
+let digits = choices [0..9]
 
-//    do!
-//        guard (
-//            s * 1000 + e * 100 + n * 10 + d +
-//            m * 1000 + o * 100 + r * 10 + e =
-//                m * 10_000 + o * 1000 + n * 100 + e * 10 + y
-//        )
+let eachunique l = List.length l = List.length (List.distinct l)
 
-//    return [ s; e; n; d; m; o; r; y ]
-//}  |> Seq.toArray 
+search {
+    let! m = choices [1..9] 
+    let! s = digits
+    do! guard (eachunique [ s; m ])
+    let! e = digits
+    do! guard (eachunique [ s; e; m]) 
+    let! n = digits
+    do! guard (eachunique [ s; e; n; m ])
+    let! d = digits
+    do! guard (eachunique [ s; e; n; d; m])
+    let! o = digits
+    do! guard (eachunique [ s; e; n; d; m; o ])
+    let! r = digits
+    do! guard (eachunique [ s; e; n; d; m; o; r ])
+    let! y = digits
+    do! guard (eachunique [ s; e; n; d; m; o; r; y ])
 
-//let rec assign l xs (seen:Set<_>) = lzlist {
-//        match l with
-//        | [] -> 
-//            let l = dict xs 
-//            do!
-//                guard (
-//                    l.['S'] * 1000 + l.['E'] * 100 + l.['N'] * 10 + l.['D'] +
-//                    l.['M'] * 1000 + l.['O'] * 100 + l.['R'] * 10 + l.['E'] =
-//                        l.['M'] * 10_000 + l.['O'] * 1000 + l.['N'] * 100 + l.['E'] * 10 + l.['Y']
-//                )
-//            return l
-//        | h :: t ->
-//            let! d = digits
-//            do! guard (not (seen.Contains d))
-//            do! guard (d > 0 || (h <> 'S' && h <> 'M')) 
-//            return! assign t ((h, d) :: xs) (seen.Add d)
-//    }
-       
-//let l = assign letters [] Set.empty |> Seq.head 
+    do!
+        guard ( 
+            s * 1000 + e * 100 + n * 10 + d +
+            m * 1000 + o * 100 + r * 10 + e =
+                m * 10_000 + o * 1000 + n * 100 + e * 10 + y
+        )
 
-//l.['S'] * 1000 + l.['E'] * 100 + l.['N'] * 10 + l.['D']
-//l.['M'] * 1000 + l.['O'] * 100 + l.['R'] * 10 + l.['E'] 
-//l.['M'] * 10_000 + l.['O'] * 1000 + l.['N'] * 100 + l.['E'] * 10 + l.['Y']
+    return [ s; e; n; d; m; o; r; y ]
+}  
+|> Hansei.Backtracking.run None
+|> LazyList.toList 
+|> List.map (List.zip letters)
 
-//Seq.toArray l 
 
+search {
+    let m = 1
+    let! s = choices [ 2 .. 9 ]
+    let! e = digits
+    do! guard (eachunique [ s; e; m ]) 
+    let! d = digits
+    do! guard (d + e >= 10)  
+    do! guard (eachunique [ s; e; d; m ])     
+    let! n = digits
+    do! guard (eachunique [ s; e; n; d; m ]) 
+    let! r = digits
+    do! guard (n + r + 1 >= 10)  
+    do! guard (eachunique [ s; e; n; d; m; r ]) 
+    let! o = digits
+    do! guard (eachunique [ s; e; n; d; m; o; r ]) 
+    let! y = digits
+    do! guard (eachunique [ s; e; n; d; m; o; r; y ]) 
+
+    do!
+        guard (
+            s * 1000 + e * 100 + n * 10 + d +
+            m * 1000 + o * 100 + r * 10 + e =
+                m * 10_000 + o * 1000 + n * 100 + e * 10 + y
+        )
+
+    return [ s; e; n; d; m; o; r; y ]
+}  
+//|> Hansei.Backtracking.run None
+|> LazyList.toArray 
+
+search {
+    let m = 1
+    let! s = choices [ 2 .. 9 ]
+    let! e = digits
+    do! guard (eachunique [ s; e; m ]) 
+    let! d = choices [ 10 - e .. 9 ] // Constraint 3: D + E must be 10 or more
+    do! guard (eachunique [ s; e; d; m ])   
+    let! n = digits
+    do! guard (eachunique [ s; e; n; d; m ])
+    let! r =  choices [ 10 - (n + 1) .. 9 ] // Constraint 4: R must be such that N + R + 1 is 10 or more
+    do! guard (eachunique [ s; e; n; d; m; r ]) 
+    let! o = digits
+    do! guard (eachunique [ s; e; n; d; m; o; r ]) 
+    let! y = digits
+    do! guard (eachunique [ s; e; n; d; m; o; r; y ]) 
+
+    do!
+        guard (
+            s * 1000 + e * 100 + n * 10 + d +
+            m * 1000 + o * 100 + r * 10 + e =
+                m * 10_000 + o * 1000 + n * 100 + e * 10 + y
+        )
+
+    return [ s; e; n; d; m; o; r; y ]
+}  
+|> Hansei.Backtracking.run None
+|> LazyList.toArray 
+
+let solve() = 
+    let lettersKey = [|'M'; 'S'; 'E'; 'D'; 'N'; 'R'; 'O'; 'Y'|]
+    let ls = dict (Array.map swap (Array.indexed lettersKey))
+    let rec iter depth (state:_ list) = search {
+        match depth with
+        | 8 -> 
+            let vs = List.rev state
+            do! guard (
+                vs[ls['S']] * 1000 + vs[ls['E']] * 100 + vs[ls['N']] * 10 + vs[ls['D']] +
+                vs[ls['M']] * 1000 + vs[ls['O']] * 100 + vs[ls['R']] * 10 + vs[ls['E']] =
+                    vs[ls['M']] * 10_000 + vs[ls['O']] * 1000 + vs[ls['N']] * 100 + vs[ls['E']] * 10 + vs[ls['Y']]
+            )
+            return (Seq.zip lettersKey vs |> Seq.toList)
+        | _ -> 
+            let! nextDigit = 
+                match depth with
+                | 1 -> choices [ 2 .. 9 ]
+                | 3 -> choices [ 10 - state[0] .. 9 ]
+                | 5 -> choices [ 10 - (state[0] + 1) .. 9 ]
+                | _ -> digits
+            let state' = nextDigit :: state
+            do! guard (eachunique state')
+            return! iter (depth + 1) state'
+    }
+    iter 1 [1]
+
+solve()
+|> Hansei.Backtracking.run None
+|> LazyList.toArray 
 
 let rowColTest f pieces r =
     pieces |> List.exists (f >> (=) r) |> not
@@ -106,6 +175,10 @@ let diagonalTest0 n dr dc r c (rows:Set<_>) (cols:Set<_>) =
         else loop (r+dr) (c+dc)
     loop r c
 
+
+let excluded pieces rs = 
+    List.filter (flip Set.contains pieces >> not) rs
+
 let diagonalTest n dr dc r c pieces =
     let rec loop r c =
         if r < 0 || r >= n || c < 0 || c >= n then true 
@@ -113,26 +186,19 @@ let diagonalTest n dr dc r c pieces =
         else loop (r+dr) (c+dc)
     loop r c
 
-
-module Seq = 
-    let nth n s = s |> Seq.skip n |> Seq.head
- 
-let excluded pieces rs = 
-    List.filter (flip Set.contains pieces >> not) rs
-
 let diagonalTests n r c pieces = 
     diagonalTest n 1 -1 r c pieces 
     && diagonalTest n -1  1 r c pieces
     && diagonalTest n  1  1 r c pieces
     && diagonalTest n -1 -1 r c pieces
 
-let locs = choices [0..7]
+let locs = choices [0..10]
 
 let nqueens cnt n = 
     let seen = Hashset() 
     //let mutable cnt = 0
     let rec loop pieces rows cols =
-        bt {
+        search {
             let! r = locs 
             do! guard (not (Set.contains r rows))
             let! c = locs
@@ -149,11 +215,38 @@ let nqueens cnt n =
         }
     loop [] Set.empty Set.empty, seen
 
+let drawBoard positions n =
+    //let board = Array.init n (fun i -> Array.init n (fun j -> if (i + j) % 2 = 0 then " □ " else " ■ "))
+    let board =
+        [| for i in 0..n-1 do
+            [| for j in 0..n-1 do
+                if (i + j) % 2 = 0 then " □ " else " ■ " |] |]
+    for (r, c) in positions do
+        board.[r].[c] <- " ♛"
+    [|for row in board do
+        String.Concat row|]
+    |> String.concat "\n"
+
+let drawBoard positions n =
+    let board = Array.init n (fun _ -> Array.create n " . ")
+    for (r, c) in positions do
+        board.[r].[c] <- " ♛"
+    for row in board do
+        printfn "%s" (String.Concat row)
+
+
+open Hansei
+    
+let positions, _ = nqueens 1 11
+//let positions = Backtracking.run (Some 128) positions  
+drawBoard (Seq.head positions) 11
+|> printfn "%s"
+
 let nqueens2 cnt n = 
     let seen = Hashset() 
     //let mutable cnt = 0
     let rec loop pieces rows cols =
-        bt { 
+        search { 
             let! r = choices (excluded rows [0..n-1]) 
             let! c = choices (excluded cols [0..n-1])  
             do! guard (diagonalTests n r c pieces) 
@@ -165,14 +258,15 @@ let nqueens2 cnt n =
             else 
                 if seen.Count < cnt then
                     return! loop ((r,c)::pieces) (Set.add r rows) (Set.add c cols) 
-
         }
     loop [] Set.empty Set.empty, seen
 
 //Lazylist: 245 ms for nqueens2; 500 ms for nqueens
 
 //let r1 = nqueens2 4 |> LazyList.removeDuplicates |> Seq.truncate 5
-let f1, r1 = nqueens2 1 10
+let f1, r1 = nqueens2 1 7
+f1 |> Seq.take 1
+r1
 f1 |> run 50 |> Seq.truncate 1 |> Seq.toArray
 //let f1 = f1 |> LazyList.removeDuplicates |> Seq.truncate 5 |> Seq.toArray
 
@@ -181,19 +275,6 @@ r1.Count
 f1
 //Seq.length f1
 
-
-let n = 10
-let grid = Array2D.create n n ' '
- 
-for r in 0..n-1 do for c in 0..n-1 do grid.[r,c] <- ' '
-for (r,c) in Seq.nth 0 r1  do
-    grid.[r,c] <- '♕'
-//grid
-for r in 0..n-1 do    
-    for c in 0..(n-1) do 
-        if grid.[r,c] = ' ' then printf "|____|" 
-        else printf "|%A|" (grid.[r,c])
-    printfn ""
 
 
 //////////////////////////////////////////

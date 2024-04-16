@@ -27,6 +27,14 @@ module Backtracking =
     let bt = Backtracking.bt
     let exactly x = choices [x]
 
+module Backtracking2 =
+    let choices xs = Backtracking.choices (List.ofSeq xs)
+    let guard b = Backtracking.guard b
+    let constrain = guard
+    let search = Backtracking.FairStream2()
+    let bt = Backtracking.bt2
+    let exactly x = choices [x]
+
 module LazyList =
     open Hansei.FSharpx.Collections
     let choices xs = LazyList.ofSeq xs

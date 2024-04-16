@@ -33,8 +33,7 @@ let rec bind m f =
     | One a -> f a
     | Choice(a, r) -> choice id (f a) (Thunk(lazy (bind r f)))
     | Thunk(Lazy i) -> Thunk(lazy (bind i f))
-
-///rewrite bind to use continuation passing style
+     
 let rec bindc k m f =
     match m with
     | Nil -> k Nil
@@ -43,6 +42,15 @@ let rec bindc k m f =
         //bindc (fun xs -> k (Thunk(lazy (choice id (f a) xs)))) r f
         Thunk(lazy (bindc (fun rs -> k (choice id (f a) rs)) r f))
     | Thunk(Lazy i) -> k (Thunk(lazy (bindc id i f)))
+
+let rec bindc2 k m f =
+    match m with
+    | Nil -> k Nil
+    | One a -> k (f a)
+    | Choice(a, r) ->
+        bindc (fun xs -> k (Thunk(lazy (choice id (f a) xs)))) r f
+    | Thunk(Lazy i) -> k (Thunk(lazy (bindc id i f)))
+
 
 module FairStream =
     let rec map f m =
@@ -233,7 +241,23 @@ type FairStream() =
     member __.BindReturn2(stream: LazyStream<'a>, stream2: LazyStream<'b>, f: 'a -> 'b -> 'c) =
         FairStream.map2 f stream stream2
 
+type FairStream2() =
+    member fs.YieldFrom x = fs.ReturnFrom x
+    member __.Yield a = One a
+    member __.Return a = One a
+    member __.ReturnFrom(x) = x
+    member __.Bind(m, f) = bindc2 id m f
+    member __.Zero() = Nil
+    member __.Combine(r, r') = choice id r r'
+    member __.Delay(f: unit -> LazyStream<_>) = Thunk(Lazy.Create f)
+    member __.BindReturn(stream: LazyStream<'a>, f: 'a -> 'b) = FairStream.map f stream
+
+    member __.BindReturn2(stream: LazyStream<'a>, stream2: LazyStream<'b>, f: 'a -> 'b -> 'c) =
+        FairStream.map2 f stream stream2
+
 let bt = FairStream()
+
+let bt2 = FairStream2()
 
 let rec run depth stream =
     match (depth, stream) with

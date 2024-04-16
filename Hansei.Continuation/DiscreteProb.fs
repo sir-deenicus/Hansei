@@ -6,8 +6,8 @@ open Prelude.SimpleDirectedGraphs
 module ListProb =  
     let inline aggregate items =
         items
-        |> List.groupBy fst
-        |> List.map (keepLeft (List.sumBy snd))
+        |> List.groupBy fst 
+        |> List.map (Pair.applyToRight (List.sumBy snd))
 
     let inline bind (dist: list<'item * 'number>) (k: 'item -> list<'changeditem * 'number>) =
         [ for (x, p) in dist do
@@ -51,7 +51,14 @@ module ListProb =
     let inline categorical l = List.normalizeWeights l
 
     let inline bernoulliChoice one a b p = [ a, p; b, one - p ]
-      
+
+    let inline uniformPrior ofInt one n baseps = 
+        let rec build distr n = dist one {
+            let! p = uniform ofInt one baseps  
+            if n = 1 then return p::distr
+            else return! build (p::distr) (n-1) 
+        } 
+        build [] n
 
     module Float =
         let dist = dist 1.
@@ -59,8 +66,9 @@ module ListProb =
         let observe = observe 1.
         let bernoulli p = bernoulli 1. p
         let bernoulliChoice a b p = bernoulliChoice 1. a b p
-     
-
+        let uniformPrior n baseps = uniformPrior float 1. n baseps
+        let always x = always 1. x
+      
 
 module VisualProb = 
 
