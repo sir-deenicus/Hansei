@@ -15,6 +15,7 @@ type LazyStream<'a> =
     | Choice of 'a * LazyStream<'a> //one element, and maybe more
     | Thunk of Lazy<LazyStream<'a>> //suspended stream
 
+[<TailCall>]
 let rec choice k r r' =
     match r with
     | Nil -> k r' //first empty-> try the second
@@ -33,7 +34,7 @@ let rec bind m f =
     | One a -> f a
     | Choice(a, r) -> choice id (f a) (Thunk(lazy (bind r f)))
     | Thunk(Lazy i) -> Thunk(lazy (bind i f))
-     
+   
 let rec bindc k m f =
     match m with
     | Nil -> k Nil
@@ -43,14 +44,14 @@ let rec bindc k m f =
         Thunk(lazy (bindc (fun rs -> k (choice id (f a) rs)) r f))
     | Thunk(Lazy i) -> k (Thunk(lazy (bindc id i f)))
 
+[<TailCall>]
 let rec bindc2 k m f =
     match m with
     | Nil -> k Nil
     | One a -> k (f a)
     | Choice(a, r) ->
-        bindc (fun xs -> k (Thunk(lazy (choice id (f a) xs)))) r f
-    | Thunk(Lazy i) -> k (Thunk(lazy (bindc id i f)))
-
+        bindc2 (fun xs -> k (Thunk(lazy (choice id (f a) xs)))) r f
+    | Thunk(Lazy i) -> k (Thunk(lazy (bindc2 id i f)))
 
 module FairStream =
     let rec map f m =
@@ -277,6 +278,8 @@ let guard assertion =
         if assertion then
             return ()
     }
+
+let fail() = bt.Zero()
 
 ///list to fairstream
 let choices xs = FairStream.ofList xs

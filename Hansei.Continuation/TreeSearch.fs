@@ -16,6 +16,7 @@ module Exhaustive =
        member __.Delay f = f ()
 
     let search = ListMonad()
+    let fail() = []
     let guard assertion = search { if assertion then return () }  
 
 
@@ -25,6 +26,7 @@ module Backtracking =
     let constrain = guard
     let search = Backtracking.FairStream()
     let bt = Backtracking.bt
+    let fail() = bt.Zero()
     let exactly x = choices [x]
 
 module Backtracking2 =
@@ -33,6 +35,7 @@ module Backtracking2 =
     let constrain = guard
     let search = Backtracking.FairStream2()
     let bt = Backtracking.bt2
+    let fail() = bt.Zero()
     let exactly x = choices [x]
 
 module LazyList =
@@ -41,4 +44,5 @@ module LazyList =
     let guard b = LazyList.guard b
     let constrain = guard
     let search = LazyList.LazyListMonad() 
+    let fail() = search.Zero()
     let exactly x = choices [x]

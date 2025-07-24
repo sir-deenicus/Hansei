@@ -4,7 +4,7 @@
     <TargetFrameworks>netstandard2.1;net50</TargetFrameworks>
     <GeneratePackageOnBuild>true</GeneratePackageOnBuild>
     <Authors>Deen Abiola</Authors>
-    <Version>0.6.8</Version> 
+    <Version>0.6.9</Version> 
     <AssemblyName>Hansei.Core</AssemblyName>
     <PackageId>Hansei.Core</PackageId>
   </PropertyGroup>
@@ -21,11 +21,11 @@
   </ItemGroup>
  
   <ItemGroup>
-    <PackageReference Include="Prelude" Version="1.9.9" />
+    <PackageReference Include="Prelude" Version="2.0.8" />
   </ItemGroup>
 
   <ItemGroup>
-    <PackageReference Update="FSharp.Core" Version="7.0.300" />
+    <PackageReference Update="FSharp.Core" Version="8.0.100" />
   </ItemGroup>
 
   <Target Name="PostBuild" AfterTargets="PostBuildEvent">

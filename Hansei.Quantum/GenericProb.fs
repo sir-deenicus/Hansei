@@ -1,5 +1,202 @@
 ﻿namespace Hansei.Generic
 
+module GenericProbTest = 
+    open System
+    open Hansei.Utils
+    open Hansei.Continuation    
+    open MathNet.Symbolics
+    open Prelude.Common
+    open MathNet.Numerics 
+    open Prelude.Math
+    open Hansei.FSharpx.Collections
+    open System.Numerics
+    
+    type Semifield<'W when  
+        'W : (static member One : 'W) and
+        'W : (static member ( + ) : 'W * 'W -> 'W) and 
+        'W : (static member ( * ) : 'W * 'W -> 'W) and
+        'W : (static member ( / ) : 'W * 'W -> 'W)> = 'W
+
+    type GenericProbabilitySpace<'T, 'W when Semifield<'W>> = LazyList<GenericWeightedTree<'T, 'W> * 'W>
+    and GenericWeightedTree<'T, 'W when Semifield<'W>>  = 
+        | Value of 'T 
+        | Continued of Lazy<GenericProbabilitySpace<'T, 'W>>      
+    
+    let inline distributionOfLazy<'T, 'W when Semifield<'W>>(weightedlist: LazyList<'T * 'W>) = 
+        LazyList.map (fun (v, p:_) -> 
+            Continued(lazy(LazyList.ofList [Value v, 'W.One ])), p) weightedlist 
+        : GenericProbabilitySpace<_, _> 
+
+    let inline distribution weightedlist = distributionOfLazy (LazyList.ofList weightedlist) : GenericProbabilitySpace<_, 'W>
+
+    let inline always<'T, 'W when Semifield<'W>>(x: 'T) = distributionOfLazy (LazyList.singleton (x, 'W.One)) : GenericProbabilitySpace<_, _>
+    
+    let inline exactly<'T, 'W when Semifield<'W>>(x: 'T) = distribution [x, 'W.One] : GenericProbabilitySpace<_, _>    
+    
+    let inline fail () = LazyList.empty : GenericProbabilitySpace<_, _>   
+
+    let inline reflect tree k =  
+        let rec make_choices pv = 
+            LazyList.map (function 
+            | (Value x, p) -> Continued(lazy(k x)), p
+            | (Continued(Lazy t), p) -> Continued(lazy(make_choices t)), p) pv 
+        make_choices tree : GenericProbabilitySpace<_, _>  
+  
+    type GenericProbabilitySpaceBuilder() =
+        member inline d.Bind(space, k) = reflect space k
+        member inline d.Return v = always v
+        member inline d.ReturnFrom vs = vs : GenericProbabilitySpace<_, _>  
+        member d.Zero () = LazyList.empty  
+        member __.Combine(x,y) = LazyList.choice x y
+        member __.Delay(f: unit -> LazyList<_>) = LazyList.delayed f 
+        member inline l.Yield x = l.Return x  
+
+    let dist = GenericProbabilitySpaceBuilder()
+
+    let inline observe test = dist { if not test then return! fail () else return () }  : GenericProbabilitySpace<_,'w>
+
+    let inline constrain test = observe test : GenericProbabilitySpace<_,'w>
+
+    let inline filterDistribution f p : GenericProbabilitySpace<_,'w> = dist {
+        let! x = p
+        do! observe (f x)
+        return x
+    }    
+
+    let inline explore (maxdepth: int option) (choices: GenericProbabilitySpace<_,'w>) =
+        let rec loop p depth down susp answers =
+            match (down, susp, answers) with
+            | _, LazyList.Nil, answers -> answers
+            | _, LazyList.Cons((Value v, pt), rest), (ans, susp) -> 
+                loop p depth down rest (insertWithx (+) v (pt * p) ans, susp) 
+            | true, LazyList.Cons((Continued (Lazy t), pt), rest), answers ->
+                let down' =
+                    Option.map (fun x -> depth < x) maxdepth 
+                    |> Option.defaultValue true   
+         
+                loop (pt * p) (depth + 1) down' t answers
+                |> loop p depth true rest 
+
+            | (down, LazyList.Cons((c, pt), rest), (ans, susp)) -> 
+                loop p depth down rest (ans, (c, pt * p) :: susp)
+         
+        let (ans, susp) = loop 'w.One 0 true choices (Dict(), [])
+      
+        [ yield! susp
+          for (KeyValue (v, p)) in ans -> Value v, p ] 
+
+    let inline first_success maxdepth ch = 
+        let rec loop maxdepth = function
+            | LazyList.Nil -> None
+            | _ when maxdepth = 0 -> None
+            | LazyList.Cons((Value _, _), _) as l -> 
+                let choices =
+                    [|for (v, p) in l do 
+                        match v with
+                        | Value x -> yield (x, p)
+                        | _ -> () |] 
+                if choices.Length = 0 then None else Some(Array.sampleOne choices)
+            | LazyList.Cons((Continued (Lazy t), pt), rest) -> (* Unclear: expand and do BFS *)
+                loop (maxdepth - 1) (LazyList.choice rest (LazyList.map (fun (v, p) -> (v, pt * p)) t))
+        loop maxdepth ch
+
+    module ProbabilitySpace =
+        let inline expectedValue r f ps = 
+            ps
+            |> List.mapi (fun u a ->
+                match a with
+                | (Value x, p) -> f x * p
+                | (_, p) -> r u * p)
+            |> List.sum
+
+        let inline map f l =
+            [ for (v, p) in l do
+                match v with
+                | Value x -> yield (Value(f x), p)
+                | _ -> yield (v, p) ]
+
+        let inline mapValues f l =
+            [ for (v, p) in l do
+                match v with
+                | Value x -> yield (f x, p)
+                | _ -> () ]
+
+        let inline mapValuesProb pf f l =
+            [ for (v, p) in l do
+                match v with
+                | Value x -> yield (f x, pf p)
+                | _ -> () ]
+
+    let inline normalizeGeneric sumWith (choices: list<'a * 'w>) =
+        let sum = sumWith snd choices
+        List.map (fun (v, p) -> (v, p / sum)) choices
+
+    let inline normalize distr = normalizeGeneric List.sumBy distr 
+
+    module Distributions =
+        let inline bernoulli (p:'W) =
+            distribution [ (true, p); (false, 'W.One - p) ]
+
+        let inline bernoulliChoice (p:'W) (a, b) =
+            distribution [ (a, p); (b, 'W.One - p) ]
+
+        let inline uniform<'a,'w when 'w :> INumberBase<'w>> f (items: 'a list) =
+            let len = f items.Length
+            distribution (List.map (fun item -> item, 'w.One / len) items) 
+
+        let inline categorical distr =
+            distribution (List.normalizeWeights distr) 
+
+        let inline geometric bernoulli n p : GenericProbabilitySpace<_, 'w> =
+            let rec loop n =
+                dist {
+                    let! a = bernoulli p
+
+                    if a then return n
+                    else return! (loop (n + 1))
+                }
+            loop n
+
+        let inline discretizedSampler toNumberType coarsener sampler (n: int) : GenericProbabilitySpace<_, 'w> =
+            dist {
+                return!
+                    [ for _ in 1..n -> sampler () ] 
+                    |> coarsenWithGeneric toNumberType coarsener
+                    |> categorical  
+            }
+
+        let inline beta draws a b =
+            let one = a/a
+            let rec loop draws a b = dist {
+                if draws <= 0 then
+                    return a / (a + b)
+                else
+                    let! ball = categorical [ 1, a / (a + b); 2, b / (a + b) ]
+
+                    if ball = 1 then
+                        return! loop (draws - 1) (a + one) b
+                    else
+                        return! loop (draws - 1) a (b + one)
+                }
+
+            loop draws a b: GenericProbabilitySpace<_, 'w>
+
+        let inline dirichlet one draws d =
+            let rec loop draws d = dist {
+                let t = List.sum d
+
+                if draws <= 0 then
+                    return (List.map (fun a -> (a / t)) d)
+                else
+                    let ps = List.mapi (fun i a -> i, (a / t)) d
+                    let! ball = categorical ps
+                    let d' = List.mapi (fun i a -> if i = ball then a + one else a) d
+                    return! loop (draws - 1) d'
+            }
+
+            loop draws d: GenericProbabilitySpace<_, 'w>
+           
+  
 module GenericProb =
     open System
     open Hansei.Utils

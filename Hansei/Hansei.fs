@@ -7,6 +7,7 @@ open Prelude.Math
 open System
 open Prelude.Math
 open Hansei.FSharpx.Collections
+
 //open Hansei.FSharpx.Collections.LazyList.ComputationExpressions
 
 //open FSharp.Collections.ParallelSeq
@@ -25,16 +26,16 @@ type ProbabilitySpace<'T> = list<WeightedTree<'T> * float>
 
 and WeightedTree<'T> =
     | Value of 'T
-    | Continued of Lazy<ProbabilitySpace<'T>>
+    | ContinuedSubTree of Lazy<ProbabilitySpace<'T>>
 
 //if use value instead of Continued, infinite computations will fail to return/terminate
 let distribution weightedlist : ProbabilitySpace<_> =
     List.map (fun (v, p) -> 
-        Continued(lazy [Value v, 1.]), p) weightedlist 
+        ContinuedSubTree(lazy [Value v, 1.]), p) weightedlist 
 
 let inline distributionOfSeq weightedlist : ProbabilitySpace<_> =
     List.map (fun (v, p) -> 
-        Continued(lazy [Value v, 1.]), float p) (List.ofSeq weightedlist)
+        ContinuedSubTree(lazy [Value v, 1.]), float p) (List.ofSeq weightedlist)
 
 let always x : ProbabilitySpace<_> =
     distribution [x, 1.]
@@ -47,8 +48,8 @@ let reflect tree k =
     let rec make_choices pv =
         List.map
             (function
-            | (Value x, p) -> Continued(lazy (k x)), p
-            | (Continued (Lazy t), p) -> Continued(lazy (make_choices t)), p)
+            | (Value x, p) -> ContinuedSubTree(lazy (k x)), p
+            | (ContinuedSubTree (Lazy t), p) -> ContinuedSubTree(lazy (make_choices t)), p)
             pv
 
     make_choices tree: ProbabilitySpace<_>
@@ -83,16 +84,22 @@ module ProbabilitySpace =
             return x
         }
 
+    let mapDistribution f p =
+        dist {
+            let! x = p
+            return f x
+        } : ProbabilitySpace<_>
+
     let hasSubtrees nodes =
         nodes
         |> List.exists (function
-            | (Continued _, _) -> true
+            | (ContinuedSubTree _, _) -> true
             | (Value _, _) -> false)
 
     let inline getTopProbs maxp data =
         let rec innerloop curritems cumulativeprob =
             function
-            | []-> curritems
+            | [] -> curritems
             | _ when cumulativeprob > maxp -> curritems
             | ((_, p) as item :: ps) -> innerloop (item :: curritems) (p + cumulativeprob) ps
 
@@ -106,8 +113,7 @@ module ProbabilitySpace =
 
         if k > 0 then
             choices |> List.rev |> List.takeOrMax k
-        else
-            choices
+            else choices
 
     let typicalSamples k p (probs: list<_>) =
         let ent = -1. * (List.sumBy (fun (_, p) -> p * log (p+1e-40)) probs)
@@ -135,7 +141,7 @@ module ProbabilitySpace =
         List.map
             (function
             | (Value x, p) -> f x, fp p
-            | (Continued _, p) -> "...", fp p)
+            | (ContinuedSubTree _, p) -> "...", fp p)
             distr
 
     let inline top l =
@@ -168,7 +174,7 @@ let explore (maxdepth: int option) (choices: ProbabilitySpace<'T>) =
         | _, [], answers -> answers
         | _, ((Value v, pt) :: rest), (ans, susp) ->
             loop p depth down rest (insertWithx (+) v (pt * p) ans, susp)
-        | true, ((Continued (Lazy t), pt) :: rest), answers ->
+        | true, ((ContinuedSubTree (Lazy t), pt) :: rest), answers ->
             let down' =
                 Option.map (fun x -> depth < x) maxdepth
                 |> Option.defaultValue true
@@ -203,7 +209,7 @@ let shallow_explore
         | _ when maxdepth = -1 -> (ans, acc)
         | ((Value v, p) :: rest) -> loop pc depth (add_answer (p * pc) v ans) acc rest
         | (c :: rest) when depth >= maxdepth -> loop pc depth ans (c :: acc) rest
-        | ((Continued (Lazy t), p) :: rest) ->
+        | ((ContinuedSubTree (Lazy t), p) :: rest) ->
             let (ans, ch) = loop (pc * p) (depth + 1) ans [] (subsample t)
             let ptotal = List.fold (fun pa (_, p) -> pa + p) 0.0 ch
 
@@ -215,10 +221,10 @@ let shallow_explore
                         ch
                         |> List.map (fun (x, p) -> x, p / ptotal) 
 
-                     Continued(lazy ch'), p * ptotal)
+                     ContinuedSubTree(lazy ch'), p * ptotal)
                     :: acc
                 else
-                    (Continued(lazy ch), p) :: acc
+                    (ContinuedSubTree(lazy ch), p) :: acc
 
             loop pc depth ans acc rest
 
@@ -240,7 +246,7 @@ let rec first_success maxdepth =
         |> Seq.groupBy fst
         |> Seq.map (fun (v, ps) -> v, Seq.sumBy snd ps)
 
-    | ((Continued (Lazy t), pt) :: rest) -> (* Unclear: expand and do BFS *)
+    | ((ContinuedSubTree (Lazy t), pt) :: rest) -> (* Unclear: expand and do BFS *)
         first_success (maxdepth - 1) (List.append rest (List.map (fun (v, p) -> v, pt * p) t))
 
 let inline first_success_rnd maxdepth ch =
@@ -259,7 +265,7 @@ let inline first_success_rnd maxdepth ch =
                 None
             else
                 Some(Array.sampleOne choices)
-        | ((Continued (Lazy t), pt) :: rest) -> (* Unclear: expand and do BFS *)
+        | ((ContinuedSubTree (Lazy t), pt) :: rest) -> (* Unclear: expand and do BFS *)
             loop (maxdepth - 1) (List.append rest (List.map (fun (v, p) -> (v, pt * p)) t))
 
     loop maxdepth ch
@@ -306,7 +312,7 @@ let rejection_sample selector subsample nsamples ch =
         function
         | [Value v, p] -> insertWithx (+) v (p * pcontrib) ans
         | [] -> ans
-        | [Continued (Lazy th), p] -> loop (depth + 1) (p * pcontrib) ans th
+        | [ContinuedSubTree (Lazy th), p] -> loop (depth + 1) (p * pcontrib) ans th
         | ch -> 
             match selector (subsample ch) with
             | None -> ans
@@ -333,7 +339,7 @@ let beam_search beamwidth ch =
     let rec pop pcontrib =
         function
         | (Value v, p) -> [Value v, p * pcontrib]
-        | (Continued (Lazy t), p) ->
+        | (ContinuedSubTree (Lazy t), p) ->
             match t with
             | [] -> []
             | [Value v, p1] -> [Value v, p * p1 * pcontrib]
@@ -365,18 +371,18 @@ let beam_search beamwidth ch =
                 candidates
 
     loop 0 1. ch
-     
+
 let sample_dist subsample nsamples maxdepth selector (ch: ProbabilitySpace<_>) =
     let rec unravelSingleton d ps =
         function
-        | [Continued (Lazy v), p] -> unravelSingleton (d + 1) (p * ps) v
+        | [ContinuedSubTree (Lazy v), p] -> unravelSingleton (d + 1) (p * ps) v
         | [Value v, p] -> Some(v, p * ps)
         | _ -> None
 
     let look_ahead pcontrib (ans, acc) =
         function (* explore the branch a bit *)
         | (Value v, p) -> insertWithx (+) v (p * pcontrib) ans, acc
-        | (Continued (Lazy t), p) ->
+        | (ContinuedSubTree (Lazy t), p) ->
             match t with
             | [] -> (ans, acc)
             | [Value v, p1] -> insertWithx (+) v (p * p1 * pcontrib) ans, acc
@@ -398,7 +404,7 @@ let sample_dist subsample nsamples maxdepth selector (ch: ProbabilitySpace<_>) =
         function
         | [Value v, p] -> insertWithx (+) v (p * pcontrib) ans
         | [] -> ans
-        | [Continued (Lazy th), p] -> loop (depth + 1) (p * pcontrib) ans th
+        | [ContinuedSubTree (Lazy th), p] -> loop (depth + 1) (p * pcontrib) ans th
         | ch when depth < maxdepth -> (* choosing one thread randomly *)
             match List.fold (look_ahead pcontrib) (ans, []) (subsample ch) with
             | (ans, []) -> ans

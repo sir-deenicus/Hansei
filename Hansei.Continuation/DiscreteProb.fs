@@ -140,7 +140,7 @@ module VisualProb =
             let i = findOne targetn 0 (List.length ps - 1) (List.rev ps) 
             if i = -1 then
                 xs, ps
-            else
+            else 
                 xs.[i..], ps.[i+targetn..]]  
    
     let inline buildGraph keepJointProbOnSameSide trackHistory soleLast normalizeJoint zero string probmonad =
@@ -174,10 +174,10 @@ module VisualProb =
             | [ node ], [ w ] when soleLast -> // If the last node should be treated as a sole node, no need to the node history trace
     
                 if prev <> "" then
-                    g.InsertNode prev |> ignore
+                    g.AddNode prev |> ignore
     
                     if fst w <> zero then
-                        g.InsertEdge(prev, node, w) |> ignore
+                        g.AddEdge(prev, node, w) |> ignore
             | node :: nodes, w :: ws ->
                 // Otherwise, create a new node by concatenating the previous node and the current node with the separator, and insert a vertex for the previous node and an edge for the current node and weight.
                 let node' =
@@ -185,10 +185,10 @@ module VisualProb =
                     else (prev + sep + node)
     
                 if prev <> "" then
-                    g.InsertNode prev |> ignore
+                    g.AddNode prev |> ignore
     
                     if fst w <> zero then
-                        g.InsertEdge(prev, node', w) |> ignore
+                        g.AddEdge(prev, node', w) |> ignore
     
                 editProbGraph trackhistory zero sep soleLast node' g (nodes, ws)
             | [], [] -> ()
@@ -221,19 +221,18 @@ module VisualProb =
         
         let g = DirectedMultiGraph<_, _>()
         
-        g.InsertNode "root" |> ignore
+        g.AddNode "root" |> ignore
         
         for (nodelist,problist) in processed do
             let n = List.head nodelist
             let w = List.head problist
             if not(g.ContainsEdge ("root", n) |> Option.defaultValue false) then
-                g.InsertEdge("root", n, w) |> ignore 
+                g.AddEdge("root", n, w) |> ignore 
             editProbGraph trackHistory zero "," soleLast  "" g (nodelist, problist)
         g
     
 
-    type GraphBuilder() =   
-        
+    type GraphBuilder() =           
         static member inline Render(probmonad, zero, ?MergeNodes, ?TrackHistory, ?SoleLast, ?tostring, ?normalizeJoint, ?keepJointProbOnSameSide) =
             
             let inline reducer isPenultimate (n, ws) =
@@ -246,7 +245,7 @@ module VisualProb =
                 Seq.map (reducer isPenultimate) parts |> ResizeArray
 
             let inline mergeNodes (g:DirectedMultiGraph<_, _>) =
-                Array.iter (g.ModifyNodeEdges reduceNodeWeights) g.Vertices; g
+                Array.iter (g.ModifyNodeEdges reduceNodeWeights) g.Nodes; g
       
             let trackHistory = defaultArg TrackHistory true 
             let soleLast = defaultArg SoleLast false
