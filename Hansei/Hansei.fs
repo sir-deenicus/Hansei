@@ -271,8 +271,8 @@ let inline first_success_rnd maxdepth ch =
     loop maxdepth ch
 
 (* ------------------------------------------------------------------------ *)
-(*	Approximate inference strategies:				                        *)
-(*  Trace a few paths from the root to a leaf of the search tree            *)
+(* Approximate inference strategies:				                        *)
+(* Trace a few paths from the root to a leaf of the search tree             *)
 (* The following procedures are non-deterministic; they use a given selector*)
 (* procedure, of the type 'selector', to chose among the alternatives.      *)
 (* For top-level inference, the selector uses system random generator.      *)
@@ -446,22 +446,95 @@ let sample_dist subsample nsamples maxdepth selector (ch: ProbabilitySpace<_>) =
 
     pre_explore 0 1.0 (Dict()) ch 
     
+
+/// <summary>
+/// A robust sampler using stratified sampling to prevent low-probability branches from being starved.
+/// </summary>
+/// <param name="subsample">Function to select a subset of branches at each step.</param>
+/// <param name="nsamples">The TOTAL number of samples to run across all strata.</param>
+/// <param name="maxdepth">The maximum recursion depth for exploration.</param>
+/// <param name="selector">Function to select one branch to follow from a list of continuations.</param>
+/// <param name="epsilon">The probability threshold to separate "heavy" from "light" branches.</param>
+/// <param name="ch">The initial probability space to sample from.</param>
+/// <returns>A normalized probability distribution as a list of (Value, probability) pairs.</returns>
+let sample_dist_stratified subsample nsamples maxdepth selector (epsilon: float) (ch: ProbabilitySpace<_>) =
+    // --- 1. Handle Edge Cases ---
+    if List.isEmpty ch then
+        []
+    else
+        // --- 2. Stratify Branches ---
+        // Partition the initial set of branches into "heavy" (high-probability) and "light" (low-probability).
+        // This is the core of stratified sampling.
+        let heavy_branches, light_branches = List.partition (fun (_, p) -> p >= epsilon) ch
+
+        // Calculate the total probability mass in each stratum. This is crucial for re-weighting later.
+        let total_heavy_p = List.sumBy snd heavy_branches
+        let total_light_p = List.sumBy snd light_branches
+        let overall_total_p = total_heavy_p + total_light_p
+
+        if overall_total_p = 0.0 then [] else
+
+        // --- 3. Allocate Sampling Budget ---
+        // Allocate the total number of samples proportionally to the probability mass of each stratum.
+        // We ensure that non-empty strata get at least one sample to avoid being ignored completely.
+        let heavy_samples =
+            if total_heavy_p > 0.0 then
+                max 1 (int (round 0 (float nsamples * total_heavy_p / overall_total_p)))
+            else 0
+        // Assign the rest of the samples to the light stratum.
+        let light_samples = nsamples - heavy_samples
+
+
+        // --- 4. Run Independent Samplers on Each Stratum ---
+        // For each non-empty stratum, we call the underlying sampling engine.
+        // It treats its given branches as a complete probability space (they sum to 1 internally).
+
+        let heavy_results =
+            if not (List.isEmpty heavy_branches) && heavy_samples > 0 then
+                sample_dist subsample heavy_samples maxdepth selector heavy_branches
+            else
+                []
+
+        let light_results =
+            if not (List.isEmpty light_branches) && light_samples > 0 then
+                sample_dist subsample light_samples maxdepth selector light_branches
+            else
+                []
+
+        // --- 5. Combine and Re-weight Results ---
+        // The results from each sampler are normalized within their own stratum.
+        // We must now "un-normalize" them by scaling by the stratum's total probability mass.
+        // This brings them back into the global probability context.
+
+        let scale_results total_p results =
+            results |> List.map (fun (v, p) -> (v, p * total_p))
+
+        let scaled_heavy = scale_results total_heavy_p heavy_results
+        let scaled_light = scale_results total_light_p light_results
+
+        // Merge the two lists of weighted values into a single dictionary, summing probabilities for identical values.
+        let combined_dist = System.Collections.Generic.Dictionary()
+        let all_scaled_results = List.append scaled_heavy scaled_light
+
+        for (v, p) in all_scaled_results do
+            match v with
+            | Value v' -> insertWithx (+) v' p combined_dist |> ignore
+            | ContinuedSubTree _ -> () // Should not happen if sampler returns final values
+
+        // --- 6. Final Normalization ---
+        // The combined dictionary now holds the correct relative probabilities.
+        // The final step is to normalize them so they sum to 1.0.
+        let final_total_p = combined_dist.Values |> Seq.sum
+        if final_total_p = 0.0 then
+            []
+        else
+            [ for (KeyValue(v, p)) in combined_dist -> Value v, p / final_total_p ]
+
 //=================
 ///////////////////
 let sample_importanceAux subsample selector pre_explore_maxdepth maxdpeth nsamples distr =
     sample_dist subsample nsamples maxdpeth selector (shallow_explore subsample pre_explore_maxdepth distr)
-
-let iterative_deepening minsamples subsample selector pre_explore_maxdepth maxdepth nsamples distr =
-    let rec iterate n =
-        let res =
-            sample_importanceAux subsample selector pre_explore_maxdepth n nsamples distr
-
-        if res.Length < minsamples && n <= maxdepth then
-            iterate (n + 1)
-        else
-            res
-
-    iterate 1
+ 
 
 type Model() =
     static member ImportanceSamples
@@ -480,34 +553,13 @@ type Model() =
             (defaultArg shallowExploreDepth 3)
             maxdepth
             nsamples
-            distr
-
-    static member IterativeDeepening
-        (
-            distr,
-            nsamples,
-            maxdepth,
-            minsamples,
-            ?subsample,
-            ?sortBeforeSampling,
-            ?shallowExploreDepth,
-            ?selector
-        ) =
-        iterative_deepening
-            minsamples
-            (defaultArg subsample id)
-            (defaultArg selector (random_selector (defaultArg sortBeforeSampling true)))
-            (defaultArg shallowExploreDepth 3)
-            maxdepth
-            nsamples
-            distr
+            distr 
 
     static member ExactInfer(distr, ?limit) = explore limit distr
 
     static member RejectionSample(distr, nsamples, ?sortBeforeSampling, ?subsample) =
         rejection_sample (random_selector (defaultArg sortBeforeSampling true)) (defaultArg subsample id) nsamples distr
-
-
+ 
     static member GreedySample(distr, nsamples, ?subsample) =
         rejection_sample (max_selector ()) (defaultArg subsample id) nsamples distr
 
@@ -527,26 +579,7 @@ type ModelFrom<'a, 'b when 'b: comparison>(distr: ProbabilitySpace<'b>, ?subsamp
             (defaultArg shallowExploreDepth 3)
             maxdepth
             nsamples
-            distr
-
-    member __.IterativeDeepening
-        (
-            nsamples,
-            maxdepth,
-            minsamples,
-            ?shallowExploreDepth,
-            ?selector,
-            ?subsampler,
-            ?sortBeforeSampling
-        ) =
-        iterative_deepening
-            minsamples
-            (defaultArg subsampler subsample)
-            (defaultArg selector (random_selector (defaultArg sortBeforeSampling true)))
-            (defaultArg shallowExploreDepth 3)
-            maxdepth
-            nsamples
-            distr
+            distr 
 
     member __.ExactInfer(?limit) = explore limit distr
 
