@@ -194,6 +194,7 @@ module LazyList =
             | CellCons(a,s) -> consc a (takeOrMax (n-1) s)
             | CellEmpty -> CellEmpty )
 
+    let truncate n s = takeOrMax n s
     let rec take n s =
       lzy(fun () ->
         if n < 0 then invalidArg "n" "the number must not be negative"

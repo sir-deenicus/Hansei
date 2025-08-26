@@ -23,11 +23,10 @@ open Hansei.FSharpx.Collections
 //Better base for http://dippl.org
 
 type ProbabilitySpace<'T> = list<WeightedTree<'T> * float>
-
 and WeightedTree<'T> =
     | Value of 'T
     | ContinuedSubTree of Lazy<ProbabilitySpace<'T>>
-
+ 
 //if use value instead of Continued, infinite computations will fail to return/terminate
 let distribution weightedlist : ProbabilitySpace<_> =
     List.map (fun (v, p) -> 
@@ -53,6 +52,14 @@ let reflect tree k =
             pv
 
     make_choices tree: ProbabilitySpace<_>
+
+let reflect2 tree k =
+    let rec makeChoices ps =
+        List.map (function
+                  | (ValueB x          , p) -> ContinuedSubTreeB (memo (fun () -> k x))   , p
+                  | (ContinuedSubTreeB m, p) -> ContinuedSubTreeB (memo (fun () -> makeChoices (force m))) , p)
+                 ps
+    makeChoices tree
 
 type ProbabilitySpaceBuilder() =
     member inline d.Bind(space, k) = reflect space k
@@ -316,7 +323,7 @@ let rejection_sample selector subsample nsamples ch =
         | ch -> 
             match selector (subsample ch) with
             | None -> ans
-            | Some(th, ptotal) -> loop (depth + 1) (pcontrib * ptotal) ans ([th, 1.0])
+            | Some(th, ptotal) -> loop (depth + 1) (pcontrib * ptotal) ans [th, 1.0]
 
     let rec driver (ch: ProbabilitySpace<_>) ans =
         function

@@ -8,102 +8,140 @@ open Hansei.FSharpx.Collections.LazyList.ComputationExpressions
 
 #time "on"
 
-lazyList { 
-    let! p = LazyList.ofList [ 1..1000 ]
-    let! q = LazyList.ofList [ 1..1000 ]
-    return (p, q) } 
-|> LazyList.reduce (fun (c,d) (a,b) -> (c+a, d+b))
- 
-lazyList {
-  yield LazyList.ofList [1..10]
-  yield LazyList.ofList [1..10]
-  yield LazyList.ofList [1..10]
-}
-|> LazyList.map (LazyList.map ((*) 2))
-|> LazyList.concat
-|> LazyList.toArray
+module LazyListTests = 
 
-lazyList {
-    let! x = LazyList.ofList [1..10]
-    let! y = LazyList.ofList [1..10]
-    do! guard (x > y && x % 2 = 0) 
-    printfn "%A" (x,y)
-    return (x,y) 
-} |> LazyList.toArray 
-
-let rec naturals n =
+    lazyList { 
+        let! p = LazyList.ofList [ 1..1000 ]
+        let! q = LazyList.ofList [ 1..1000 ]
+        return (p, q) } 
+    |> LazyList.reduce (fun (c,d) (a,b) -> (c+a, d+b))
+    
     lazyList {
-        do! guard (n >= 0I)
-        yield n
-        return! (naturals (n+1I))
+    yield LazyList.ofList [1..10]
+    yield LazyList.ofList [1..10]
+    yield LazyList.ofList [1..10]
     }
+    |> LazyList.map (LazyList.map ((*) 2))
+    |> LazyList.concat
+    |> LazyList.toArray
 
-let rec integers z =
     lazyList {
-        yield z
-        if z <> 0I then yield -z
-        return! integers (z + 1I)
-    } 
+        let! x = LazyList.ofList [1..10]
+        let! y = LazyList.ofList [1..10]
+        do! guard (x > y && x % 2 = 0) 
+        printfn "%A" (x,y)
+        return (x,y) 
+    } |> LazyList.toArray 
 
-integers 0I
-|> LazyList.take 15 
-|> LazyList.toArray  
+    let rec naturals n =
+        lazyList {
+            do! guard (n >= 0I)
+            yield n
+            return! (naturals (n+1I))
+        }
 
-LazyList.zip (naturals 0I) (integers 0I) 
-|> LazyList.take 10 
-|> LazyList.toArray
- 
-LazyList.choice (integers 0I) (integers 10I)
-|> LazyList.take 100_000
-|> LazyList.toArray
+    let rec integers z =
+        lazyList {
+            yield z
+            if z <> 0I then yield -z
+            return! integers (z + 1I)
+        } 
 
-LazyList.append (integers 0I) (integers 10I)
-|> LazyList.take 100_000
-|> LazyList.toArray 
+    integers 0I
+    |> LazyList.take 15 
+    |> LazyList.toArray  
 
-LazyList.ofList [1..1000]
-|> LazyList.map ((*) 5) 
-|> LazyList.take 2 
-|> LazyList.toArray
+    LazyList.zip (naturals 0I) (integers 0I) 
+    |> LazyList.take 10 
+    |> LazyList.toArray
+    
+    LazyList.choice (integers 0I) (integers 10I)
+    |> LazyList.take 100_000
+    |> LazyList.toArray
+
+    LazyList.append (integers 0I) (integers 10I)
+    |> LazyList.take 100_000
+    |> LazyList.toArray 
+
+    LazyList.ofList [1..1000]
+    |> LazyList.map ((*) 5) 
+    |> LazyList.take 2 
+    |> LazyList.toArray
 
 
 //module FairStreamTests =
 open Hansei.Backtracking
+ 
+let sample =
+    // a simple infinite source
+    let rec numsFrom n = Choice(n, Thunk(lazy (numsFrom (n+1))))
+    numsFrom 1
+
+let f x = Choice(x, One (x * 10))
+let r1 = bind sample f
+let r2 = bindc id sample f
+let r3 = bindc2 id sample f
+let r4 = bindc3 id sample f
+
+let p1 = FairStream.toListN 20 r1
+let p2 = FairStream.toListN 20 r2
+let p3 = FairStream.toListN 20 r3
+let p4 = FairStream.toListN 20 r4
+ 
+let rec naturalsFrom n = Choice(n, Thunk(lazy (naturalsFrom (n+1)))) 
+
+let big = interleave (naturalsFrom 0) (naturalsFrom 10)
+
+FairStream.take 1_000_000 big
+
+// Fair diagonal product (using your existing fair Cartesian)
+let pairs =
+    FairStream.cartesianProduct (naturalsFrom 0) (naturalsFrom 0)
+
+pairs |> FairStream.take 30
+
+ 
+// Sequential product via bt (nested let!) – fair with current bind/choice.
+let pairsSequential =
+    bt {
+        let! x = naturalsFrom 0
+        let! y = naturalsFrom 0
+        return (x, y)
+    }
+pairsSequential |> FairStream.take 30    
 
 let rec naturals n =
-    bt {
+    bt3 {
         do! guard (n >= 0I)
         yield n
         return! (naturals (n + 1I))
     }
 
 let rec integers z =
-    bt {
+    bt3 {
         yield z
         if z <> 0I then yield -z
         return! integers (z + 1I)
     } 
 
 let rationalsIntPair (n,d) =
-    bt {
+    bt3 {
         do! guard (d <> 0I)
         let! p = integers n
         let! q = integers d
         return (p,q)
     }
-
-let r1 =
-    integers 0I
-    |> FairStream.map ((*) 2I)
-    |> run (Some 100)
-    |> LazyList.take 10 
-    |> LazyList.toArray
-
-let r2 =
-    FairStream.zip (naturals 0I) (integers 0I)
-    |> run (Some 100)
-    |> LazyList.take 10
-    |> LazyList.toArray
+ 
+integers 0I
+|> FairStream.map ((*) 2I)
+|> run (Some 100)
+|> LazyList.take 10 
+|> LazyList.toArray
+ 
+FairStream.zip (naturals 0I) (integers 0I)
+|> run (Some 100)
+|> LazyList.take 10
+|> LazyList.toArray
 
     
 integers 0I 
@@ -126,7 +164,7 @@ bt {
 
 let r3 =
     rationalsIntPair (0I,1I)
-    |> run (Some 12)
+    |> run (Some 10)
     |> LazyList.toArray  
 
 //with no guard check, 30 yields 306; 42 = 1500; 50 = 4174; 90 = 644511

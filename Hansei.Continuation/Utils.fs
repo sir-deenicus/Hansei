@@ -9,6 +9,20 @@ open Prelude.Collections.FibonacciHeap
 open Prelude.Collections 
 open System.Collections.Generic
 
+/// A thunk that memoises its result the first time it is forced.
+type Memo<'T> = private Memo of (unit -> 'T) * ref<option<'T>> 
+
+let memo (f:unit -> 'T) : Memo<'T> =
+    Memo (f, ref None)
+
+let force (Memo (f, cell)) =
+    match cell.Value with
+    | Some v -> v
+    | None   ->
+        let v = f ()
+        cell.Value <- Some v
+        v
+
 //////////////////////////////////////  
 
 let insertWith fn key item m =    
