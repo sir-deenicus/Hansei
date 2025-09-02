@@ -379,7 +379,7 @@ let beam_search beamwidth ch =
 
     loop 0 1. ch
 
-let sample_dist subsample nsamples maxdepth selector (ch: ProbabilitySpace<_>) =
+let sample_dist subsample nsamples max_pre_explore_depth maxdepth selector (ch: ProbabilitySpace<_>) =
     let rec unravelSingleton d ps =
         function
         | [ContinuedSubTree (Lazy v), p] -> unravelSingleton (d + 1) (p * ps) v
@@ -400,12 +400,12 @@ let sample_dist subsample nsamples maxdepth selector (ch: ProbabilitySpace<_>) =
                     let ch = subsample _ch
                     let ptotal = List.fold (fun pa (_, p) -> pa + p) 0.0 ch
 
-                    (ans,
-                     if ptotal < nearly_one then
-                         (List.map (fun (x, p) -> (x, p / ptotal)) ch, p * ptotal)
-                         :: acc
-                     else
-                         (ch, p) :: acc)
+                    ans,
+                    if ptotal < nearly_one then
+                        (List.map (fun (x, p) -> (x, p / ptotal)) ch, p * ptotal)
+                        :: acc
+                    else
+                        (ch, p) :: acc
 
     let rec loop depth pcontrib (ans: Dict<_, _>) =
         function
@@ -447,7 +447,7 @@ let sample_dist subsample nsamples maxdepth selector (ch: ProbabilitySpace<_>) =
         (* pre-explore initial threads *)
         match List.fold (look_ahead pcontrib) (ans, []) (subsample ch) with
         | (ans, []) -> (* pre-exploration solved the problem *) [ for (KeyValue (v, p)) in ans -> Value v, p ]
-        | (ans, [ ch, p ]) when depth < maxdepth -> (* only one choice, make more *)
+        | (ans, [ ch, p ]) when depth < max_pre_explore_depth -> (* only one choice, make more *)
             pre_explore (depth + 1) (pcontrib * p) ans ch
         | (ans, cch) -> driver pcontrib ans cch
 
@@ -464,7 +464,7 @@ let sample_dist subsample nsamples maxdepth selector (ch: ProbabilitySpace<_>) =
 /// <param name="epsilon">The probability threshold to separate "heavy" from "light" branches.</param>
 /// <param name="ch">The initial probability space to sample from.</param>
 /// <returns>A normalized probability distribution as a list of (Value, probability) pairs.</returns>
-let sample_dist_stratified subsample nsamples maxdepth selector (epsilon: float) (ch: ProbabilitySpace<_>) =
+let sample_dist_stratified subsample nsamples max_pre_explore_depth maxdepth selector (epsilon: float) (ch: ProbabilitySpace<_>) =
     // --- 1. Handle Edge Cases ---
     if List.isEmpty ch then
         []
@@ -498,13 +498,13 @@ let sample_dist_stratified subsample nsamples maxdepth selector (epsilon: float)
 
         let heavy_results =
             if not (List.isEmpty heavy_branches) && heavy_samples > 0 then
-                sample_dist subsample heavy_samples maxdepth selector heavy_branches
+                sample_dist subsample heavy_samples max_pre_explore_depth maxdepth selector heavy_branches
             else
                 []
 
         let light_results =
             if not (List.isEmpty light_branches) && light_samples > 0 then
-                sample_dist subsample light_samples maxdepth selector light_branches
+                sample_dist subsample light_samples max_pre_explore_depth maxdepth selector light_branches
             else
                 []
 
@@ -539,8 +539,8 @@ let sample_dist_stratified subsample nsamples maxdepth selector (epsilon: float)
 
 //=================
 ///////////////////
-let sample_importanceAux subsample selector pre_explore_maxdepth maxdpeth nsamples distr =
-    sample_dist subsample nsamples maxdpeth selector (shallow_explore subsample pre_explore_maxdepth distr)
+let sample_importanceAux subsample selector pre_explore_maxdepth shallow_explore_maxdepth maxdpeth nsamples distr =
+    sample_dist subsample nsamples pre_explore_maxdepth maxdpeth selector (shallow_explore subsample shallow_explore_maxdepth distr)
  
 
 type Model() =
@@ -551,13 +551,15 @@ type Model() =
             maxdepth,
             ?subsample,
             ?sortBeforeSampling,
+            ?pre_exploreDepth,
             ?shallowExploreDepth,
             ?selector
         ) =
         sample_importanceAux
             (defaultArg subsample id)
             (defaultArg selector (random_selector (defaultArg sortBeforeSampling true)))
-            (defaultArg shallowExploreDepth 3)
+            (defaultArg pre_exploreDepth 3)
+            (defaultArg shallowExploreDepth 2)
             maxdepth
             nsamples
             distr 
@@ -579,11 +581,12 @@ type ModelFrom<'a, 'b when 'b: comparison>(distr: ProbabilitySpace<'b>, ?subsamp
 
     member __.model = distr
 
-    member __.ImportanceSample(nsamples, maxdepth, ?shallowExploreDepth, ?subsampler, ?selector, ?sortBeforeSampling) =
+    member __.ImportanceSample(nsamples, maxdepth, ?preExploreDepth, ?shallowExploreDepth, ?subsampler, ?selector, ?sortBeforeSampling) =
         sample_importanceAux
             (defaultArg subsampler subsample)
             (defaultArg selector (random_selector (defaultArg sortBeforeSampling true)))
-            (defaultArg shallowExploreDepth 3)
+            (defaultArg preExploreDepth 3)
+            (defaultArg shallowExploreDepth 2)
             maxdepth
             nsamples
             distr 

@@ -3,7 +3,15 @@ open Hansei.Continuation
 open Hansei.FSharpx.Collections  
  
 open Hansei.Backtracking
+let rec naturals n = Choice(n, Thunk(lazy (naturals (n+1))))
+let rec pureRow x y = Choice((x,y), pureRow x (y+1)) 
 
+
+//let rec naturalsFrom n = Choice(n, naturalsFrom (n+1))
+let pairsFair =
+    FairStream.cartesianProductFairSimple (naturals 0) (naturals 0)
+
+pairsFair |> FairStream.take 20   |> printfn "%A"
 let rec ints i = bt {yield i; yield! ints (i+1)}
    
 

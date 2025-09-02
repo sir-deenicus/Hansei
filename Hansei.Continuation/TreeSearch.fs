@@ -19,7 +19,24 @@ module Exhaustive =
     let fail() = []
     let guard assertion = search { if assertion then return () }  
 
+module SeqSearch =
+    // a clear, explicit name for the seq-based search monad
+    let choices xs : seq<'a> = xs
+    let exactly x = choices [x]
 
+    type SeqMonad() =
+       member __.Bind(m, f) = Seq.collect f m
+       member __.Return x = seq { yield x }
+       member __.ReturnFrom s = s
+       member __.Zero () = Seq.empty
+       member __.Combine(s1,s2) = Seq.append s1 s2
+       member __.Delay f = seq { yield! f () }
+
+    let search = SeqMonad()
+    let fail() = search.Zero()
+    let guard b = search { if b then return () }
+    let constrain = guard
+    
 module Backtracking =
     let choices xs = Backtracking.choices (List.ofSeq xs)
     let guard b = Backtracking.guard b
