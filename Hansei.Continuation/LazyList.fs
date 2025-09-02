@@ -204,6 +204,18 @@ module LazyList =
           | CellCons(a,s) -> consc a (take (n-1) s)
           | CellEmpty -> invalidArg "n" "not enough items in the list" ) 
 
+    let takeWith f n (s: LazyList<'a>) =
+        let rec loop k acc cur =
+            if k = 0 then List.rev acc
+            else
+                match getCell cur with
+                | CellEmpty -> List.rev acc
+                | CellCons (h,t) ->
+                    f h
+                    loop (k-1) (h::acc) t
+        if n < 0 then invalidArg "n" "the number must not be negative"
+        else loop n [] s
+
     let rec tryTake n s =
         if n < 0 then None
         elif n = 0 then Some empty
@@ -261,6 +273,40 @@ module LazyList =
                 loop s xs (fun (s,ys) -> cont (s, cons y ys))
         loop s l id
 
+    /// Depth-limited DFS over a tree: expand : 's -> seq<'s>
+    let rec depthLimitedSearch expand isGoal depth state =
+        lzy (fun () ->
+            if isGoal state then
+                CellCons(state, empty)
+            elif depth = 0 then
+                CellEmpty
+            else
+                // collect children first (finite list) then DFS them
+                let children = expand state |> Seq.toList
+                // recursively append child results
+                let rec loop = function
+                    | [] -> CellEmpty
+                    | c::rest ->
+                        let childResults = depthLimitedSearch expand isGoal (depth-1) c
+                        match LazyList.getCell childResults with
+                        | CellEmpty -> loop rest
+                        | CellCons(h,t) ->
+                            // append remaining child results then siblings
+                            let rec appendCells cell tailThunk =
+                                match cell with
+                                | CellEmpty -> LazyList.getCell (tailThunk())
+                                | CellCons(x,xs) ->
+                                    CellCons(x,
+                                        lzy (fun () -> appendCells (LazyList.getCell xs) tailThunk))
+                            appendCells (CellCons(h,t)) (fun () -> lzy (fun () -> loop rest))
+                loop children)
+
+    /// Iterative deepening: concatenate depth layers
+    let iterativeDeepening expand isGoal start =
+        Seq.initInfinite id
+        |> Seq.map (fun d -> depthLimitedSearch expand isGoal d start)
+        |> Seq.fold (fun acc layer -> append acc layer) empty
+
     let rec ofList l =
       lzy(fun () ->
         match l with [] -> CellEmpty | h :: t -> consc h (ofList t))
@@ -275,6 +321,8 @@ module LazyList =
     let takeList n s = take n s |> toList
 
     let takeOrMaxList n s = takeOrMax n s |> toList
+
+    let truncateToList n s = takeOrMaxList n s
 
     let rec iter f s =
       match getCell s with
@@ -292,11 +340,14 @@ module LazyList =
         | CellCons(a,b) -> arr.[i] <- a; copyTo arr b (i+1)
 
     let ofArray a = copyFrom 0 a
+
     let toArray s = Array.ofList (toList s)
 
     let takeArray n s = take n s |> toArray
 
     let takeOrMaxArray n s = takeOrMax n s |> toArray
+
+    let truncateToArray n s = truncate n s |> toArray
 
     let rec lengthAux n s =
         match getCell s with
@@ -417,13 +468,10 @@ module LazyList =
         member __.MergeSources(xs,ys) = 
             concat (map (fun x -> map (fun y -> (x,y)) ys) xs) 
         member l.Yield x = l.Return x
-        member ll.YieldFrom l = ll.ReturnFrom l
+        member lz.YieldFrom l = lz.ReturnFrom l
         member __.BindReturn(stream:LazyList<'a>, f:'a->'b) =
-                map f stream 
-                
-        member __.BindReturn2(stream:LazyList<'a>, stream2:LazyList<'b>, f:'a->'b->'c) =
-            map2 f stream stream2
-                 
+                map f stream  
+
     let lazyList = LazyListMonad()  
 
     let guard assertion = lazyList { if assertion then return () }  
@@ -451,6 +499,7 @@ module LazyList =
 
     let removeDuplicatesOfSeq xs = xs |> ofSeq |> removeDuplicates  
 
+    ///Warning: Requires that ys is finite.
     let cartesianProduct (xs: LazyList<'a>) (ys: LazyList<'b>) =
         lazyList {
             for x in xs do
