@@ -1,19 +1,20 @@
 ﻿module Hansei.Backtracking
 
 open Hansei.FSharpx.Collections
+open Prelude.Common
 
 //The backtracking monad or fairstream concept is also Oleg's, based on the core given here: http://fortysix-and-two.blogspot.com/2009/09/simple-and-fair-backtracking.html
 //and like the probability monad of this library, leverages the power of lazy non-determinism. The backtracking monad also implements
-//the logic monad interface and so also captures the core of logic programming.
+//the logic monad interface and so also captures the core of logic programming. This is because unlike lazy lists (which are depth first), it maintains a BFSish frontier and is complete.
 //One can imagine relaxing limitations--regular lists can also model non-determinism but are exhaustive.
 //Moving to lazy lists the new issue is one of the bind operation where one or more are infinite lists. We never finish the first list,
 //fairstreams fix this by interleaving. The core addition over lazy lists is the lazy suspended Thunk case.
 
-type LazyStream<'a> =
+type LazyFairStream<'a> =
     | Nil //empty
     | One of 'a //one element
-    | Choice of 'a * LazyStream<'a> //one element, and maybe more
-    | Thunk of Lazy<LazyStream<'a>> //suspended stream
+    | Choice of 'a * LazyFairStream<'a> //one element, and maybe more
+    | Thunk of Lazy<LazyFairStream<'a>> //suspended stream
 
 [<TailCall>]
 let rec choice0 k r r' =
@@ -185,12 +186,12 @@ module FairStream =
             else
                 headAndTailN maxn (n + 1) l
 
-    let head l = headn 4 0 l
+    let head l = headn 5 0 l
 
-    let tail l = tailn 4 0 l
+    let tail l = tailn 5 0 l
 
     let (|Cons|Empty|) l =
-        match (headAndTailN 4 0 l) with
+        match (headAndTailN 5 0 l) with
         | None -> Empty
         | Some(a, t) -> Cons(a, t)
 
@@ -224,7 +225,7 @@ module FairStream =
                 Thunk(lazy (filter f r))
         | Thunk(Lazy i) -> Thunk(lazy (filter f i))
 
-    let rec concat (ls: LazyStream<LazyStream<'a>>) =
+    let rec concat (ls: LazyFairStream<LazyFairStream<'a>>) =
         match ls with
         | Nil -> Nil
         | One a -> a
@@ -233,20 +234,42 @@ module FairStream =
         | Choice(a, b) -> Thunk(lazy (choice a (concat b)))
         | Thunk(Lazy r) -> Thunk(lazy (concat r))
 
-    ///Warning!!! Must be Finite!!
-    let fold f s ls =
-        //Use CPS
-        let rec loop k s l =
-            match l with
-            | Empty -> k s
-            | Cons(x, xs) -> loop (fun s' -> k (f s' x)) s xs
+    let fold maxSteps f s ls =
+        let rec loop steps k acc l =
+            if steps <= 0 then None
+            else
+                match l with
+                | Empty -> Some (k acc)
+                | Cons(x, xs) -> loop (steps - 1) (fun acc' -> k (f acc' x)) acc xs
+        loop maxSteps id s ls
 
-        loop id s ls
-
-    let reduce f ls =
+    /// <summary>
+    /// Produces a stream of accumulated values by applying a binary function to an accumulator and each element of an input stream,
+    /// analogous to List.scan/Seq.scan.
+    /// </summary>
+    /// <param name="f">Function that combines the current accumulator with the next element to produce a new accumulator.</param>
+    /// <param name="init">Initial accumulator value that becomes the first element of the resulting stream.</param>
+    /// <param name="s">Input stream to scan. Expected to be one of the stream cases: Nil, One, Choice, or Thunk(Lazy ...).</param>
+    /// <returns>
+    /// A stream whose first element is the initial accumulator and whose subsequent elements are the successive accumulated values.
+    /// </returns>
+    /// <remarks>
+    /// The implementation preserves laziness by wrapping recursive work in Thunk where appropriate, so the tail of the resulting stream
+    /// is computed only as demanded. Use this when you need incremental accumulation over potentially infinite or lazily-produced streams.
+    /// </remarks>
+    let scan f init s =
+        let rec step acc stream =
+            match stream with
+            | Nil -> One acc
+            | One a -> Choice(acc, One (f acc a))
+            | Choice(a, r) -> Choice(acc, Thunk(lazy (step (f acc a) r)))
+            | Thunk(Lazy t) -> Thunk(lazy (step acc t))
+        step init s  
+        
+    let reduce maxSteps f ls =
         match ls with
         | Empty -> failwith "Empty stream"
-        | Cons(x, xs) -> fold f x xs
+        | Cons(x, xs) -> fold maxSteps f x xs
 
     let combine l1 l2 = choice l1 l2
 
@@ -269,7 +292,6 @@ module FairStream =
             else
                 e.Dispose()
                 Nil
-
         loop()
 
     let ofLazyList xs = 
@@ -281,33 +303,41 @@ module FairStream =
 
         build xs
 
-    let take n s =
+    let takeWith f n s =
         let rec loop k acc s =
             if k = 0 then List.rev acc else
             match s with
             | Nil -> List.rev acc
-            | One a -> List.rev (a::acc)
-            | Choice(a,r) -> loop (k-1) (a::acc) r
+            | One a -> f a; List.rev (a::acc)
+            | Choice(a,r) -> f a; loop (k-1) (a::acc) r
             | Thunk(Lazy t) -> loop k acc t
         loop n [] s
 
-    // Attach indices to a stream: (0,x0),(1,x1),...
-    let indexed (s: LazyStream<'a>) : LazyStream<int * 'a> =
+    let take n s = takeWith id n s
+
+    /// Attach indices to a stream: (0,x0),(1,x1),...
+    let indexed (s: LazyFairStream<'a>) : LazyFairStream<int * 'a> =
         let rec loop i s =
             match s with
             | Nil -> Nil
             | One a -> One(i, a)
             | Choice(a, rest) -> Choice((i, a), Thunk(lazy (loop (i+1) rest)))
             | Thunk(Lazy t) -> Thunk(lazy (loop i t))
-        loop 0 s
+        loop 0 s 
 
-    let rec toListN n s =
-        if n = 0 then []
-        else
-            match head s, tail s with
-            | Some h, Some t -> h :: toListN (n-1) t
-            | Some h, None -> [h]
-            | _ -> [] 
+    /// Remove duplicates (first occurrence wins) – requires equality & hashing.
+    let removeDuplicates (s: LazyFairStream<'a>) =
+        let seen = Hashset() 
+        let rec loop stream =
+            match stream with
+            | Nil -> Nil
+            | One a ->
+                if seen.Add a then One a else Nil
+            | Choice(a, rest) ->
+                if seen.Add a then Choice(a, Thunk(lazy (loop rest)))
+                else Thunk(lazy (loop rest))
+            | Thunk(Lazy t) -> Thunk(lazy (loop t))
+        loop s
 
     let cartesianProduct xs ys = //as either stream might be infinite, we are forced to use bind
         bindc2 id xs (fun x -> bindc2 id ys (fun y -> One(x, y)))
@@ -321,8 +351,8 @@ type FairStream() =
     member __.Bind(m, f) = bindc id m f
     member __.Zero() = Nil
     member __.Combine(r, r') = choice  r r'
-    member __.Delay(f: unit -> LazyStream<_>) = Thunk(Lazy.Create f)
-    member __.BindReturn(stream: LazyStream<'a>, f: 'a -> 'b) = FairStream.map f stream
+    member __.Delay(f: unit -> LazyFairStream<_>) = Thunk(Lazy.Create f)
+    member __.BindReturn(stream: LazyFairStream<'a>, f: 'a -> 'b) = FairStream.map f stream
  
 type FairStream2() =
     member fs.YieldFrom x = fs.ReturnFrom x
@@ -332,8 +362,8 @@ type FairStream2() =
     member __.Bind(m, f) = bindc2 id m f
     member __.Zero() = Nil
     member __.Combine(r, r') = choice r r'
-    member __.Delay(f: unit -> LazyStream<_>) = Thunk(Lazy.Create f)
-    member __.BindReturn(stream: LazyStream<'a>, f: 'a -> 'b) = FairStream.map f stream
+    member __.Delay(f: unit -> LazyFairStream<_>) = Thunk(Lazy.Create f)
+    member __.BindReturn(stream: LazyFairStream<'a>, f: 'a -> 'b) = FairStream.map f stream
  
 
 type FairStream3() =
@@ -343,10 +373,10 @@ type FairStream3() =
     member _.Bind(m, f) = bindSafeRec m f
     member _.Zero() = Nil
     member _.Combine(r, r') = choice r r'
-    member _.Delay(f: unit -> LazyStream<_>) = Thunk(Lazy.Create f)
-    member _.BindReturn(stream: LazyStream<'a>, f: 'a -> 'b) = FairStream.map f stream
+    member _.Delay(f: unit -> LazyFairStream<_>) = Thunk(Lazy.Create f)
+    member _.BindReturn(stream: LazyFairStream<'a>, f: 'a -> 'b) = FairStream.map f stream
  
-    member t.MergeSources(stream1: LazyStream<'a>, stream2: LazyStream<'b>) =
+    member t.MergeSources(stream1: LazyFairStream<'a>, stream2: LazyFairStream<'b>) =
         FairStream.cartesianProduct stream1 stream2
 
 let bt = FairStream()
@@ -355,19 +385,31 @@ let bt2 = FairStream2()
 
 let bt3 = FairStream3()
 
-let rec run depth stream =
-    match (depth, stream) with
-    | _, Nil -> LazyList.empty
-    | _, One a -> LazyList.singleton a
-    | _, Choice(a, r) ->
+// let rec run depth stream =
+//     match (depth, stream) with
+//     | _, Nil -> LazyList.empty
+//     | _, One a -> LazyList.singleton a
+//     | _, Choice(a, r) ->
+//         LazyList.lazyList {
+//             yield a
+//             yield! run depth r
+//         }
+//     //LazyList.cons a (run depth r)
+//     | Some 0, Thunk _ -> LazyList.empty //exhausted depth
+//     | d, Thunk(Lazy r) -> run (Option.map (fun n -> n - 1) d) r
+
+let rec run budget stream =
+    if Option.defaultValue 1 budget <= 0 then LazyList.empty else
+    match stream with
+    | Nil -> LazyList.empty
+    | One a -> LazyList.singleton a
+    | Choice(a, r) ->
         LazyList.lazyList {
             yield a
-            yield! run depth r
-        }
-    //LazyList.cons a (run depth r)
-    | Some 0, Thunk _ -> LazyList.empty //exhausted depth
-    | d, Thunk(Lazy r) -> run (Option.map (fun n -> n - 1) d) r
-
+            yield! run (Option.map (fun n -> n - 1) budget) r
+        } 
+    | Thunk(Lazy r) -> run budget r
+    
 let guard assertion =
     bt {
         if assertion then
