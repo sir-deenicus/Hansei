@@ -9,50 +9,7 @@ open Prelude.Common
 open MathNet.Numerics
 open Prelude.Math
 //open Hansei.FSharpx.Collections
-open System.Numerics
-
-
-// type GenericProbabilitySpaceBuilder() =
-//     member inline d.Bind(space, k) = reflect space k
-//     member inline d.Return v = always v
-//     member inline d.ReturnFrom vs = vs: GenericProbabilitySpace<_, _>
-//     member inline d.YieldFrom vs = vs: GenericProbabilitySpace<_, _>
-//     member d.Zero() = []
-    
-//     member inline __.For
-//         (sequence: seq<'a>, body: 'a -> GenericProbabilitySpace<'b, 'W>)
-//         : GenericProbabilitySpace<'b, 'W> =
-//         Seq.fold
-//             (fun acc elem ->
-//                 let comp = body elem
-//                 List.append acc comp)
-//             (__.Zero())
-//             sequence
-
-//     //member __.Combine(x, y) = List.append x y
-
-//     // Sequential Combine: run left, then right
-//     member inline d.Combine
-//         (left: GenericProbabilitySpace<'a,'W>,
-//          right: GenericProbabilitySpace<'b,'W>) : GenericProbabilitySpace<'b,'W> =
-//         d.Bind(left, fun _ -> right)
-
-
-//     member inline __.Delay(f: unit -> GenericProbabilitySpace<'a, 'W>) = [ ContinuedSubTree(memo f), 'W.One ]
-//     member inline l.Yield x = l.Return x
-
-//     member inline __.While
-//         (guard: unit -> bool,
-//          body: unit -> GenericProbabilitySpace<unit,'W>)
-//         : GenericProbabilitySpace<unit,'W> =
-//         let rec loop () =
-//             if guard() then
-//                 __.Bind(body(), fun () -> loop())
-//             else
-//                 __.Zero()
-//         loop()
-
-// let dist = GenericProbabilitySpaceBuilder()
+open System.Numerics 
 
 // =============================================
 // =============  DESIGN GUIDELINES  ===========
