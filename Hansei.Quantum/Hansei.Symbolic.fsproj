@@ -5,6 +5,7 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <None Include="genericprobtest.fsx" />
     <Compile Include="GenericProb.fs" />
     <Compile Include="DiscreteProb.fs" />
     <Compile Include="Rationals.fs" />
