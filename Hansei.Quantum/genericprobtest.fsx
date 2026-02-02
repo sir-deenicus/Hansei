@@ -11,6 +11,109 @@ open Prelude.Math
 //open Hansei.FSharpx.Collections
 open System.Numerics
 
+
+// type GenericProbabilitySpaceBuilder() =
+//     member inline d.Bind(space, k) = reflect space k
+//     member inline d.Return v = always v
+//     member inline d.ReturnFrom vs = vs: GenericProbabilitySpace<_, _>
+//     member inline d.YieldFrom vs = vs: GenericProbabilitySpace<_, _>
+//     member d.Zero() = []
+    
+//     member inline __.For
+//         (sequence: seq<'a>, body: 'a -> GenericProbabilitySpace<'b, 'W>)
+//         : GenericProbabilitySpace<'b, 'W> =
+//         Seq.fold
+//             (fun acc elem ->
+//                 let comp = body elem
+//                 List.append acc comp)
+//             (__.Zero())
+//             sequence
+
+//     //member __.Combine(x, y) = List.append x y
+
+//     // Sequential Combine: run left, then right
+//     member inline d.Combine
+//         (left: GenericProbabilitySpace<'a,'W>,
+//          right: GenericProbabilitySpace<'b,'W>) : GenericProbabilitySpace<'b,'W> =
+//         d.Bind(left, fun _ -> right)
+
+
+//     member inline __.Delay(f: unit -> GenericProbabilitySpace<'a, 'W>) = [ ContinuedSubTree(memo f), 'W.One ]
+//     member inline l.Yield x = l.Return x
+
+//     member inline __.While
+//         (guard: unit -> bool,
+//          body: unit -> GenericProbabilitySpace<unit,'W>)
+//         : GenericProbabilitySpace<unit,'W> =
+//         let rec loop () =
+//             if guard() then
+//                 __.Bind(body(), fun () -> loop())
+//             else
+//                 __.Zero()
+//         loop()
+
+// let dist = GenericProbabilitySpaceBuilder()
+
+// =============================================
+// =============  DESIGN GUIDELINES  ===========
+// =============================================
+//
+// GenericProbabilitySpace<'T,'W> represents the FREE SEMIRING over outcomes 'T with weights 'W.
+// Required semiring ops on 'W: Zero, One, (+), (*).
+//
+// Core algebra:
+//   Return v            => singleton (unit path → v) with weight One
+//   Bind p f (let!)     => path sequencing (weights multiply: *)
+//   Combine a b (;)     => ADDITIVE UNION (branching) (weights add: +)
+//   Zero                => empty alternative set
+//   explore             => normal form: collapses identical Value keys by (+) their weights
+//
+// Consequences of Combine = additive union:
+//   dist { return 6; return 7 }  == δ6 + δ7
+//   Multiple return / yield lines are ALTERNATIVES, NOT early exit.
+//   Duplicated branches scale weight in non‑idempotent semirings (Probability, Counting, Complex amplitudes).
+//   In idempotent semirings (Logic: OR, Viterbi: max, Tropical: min) duplicates are absorbed.
+//   For-Loop inside dist enumerates (adds) one branch per iteration (disjunction).
+//
+// Separation of concerns:
+//   Sequencing (AND)      => let! / Bind
+//   Branching  (OR/+)     => multiple returns / distribution / for over choices
+//
+// Mutation & backtracking:
+//   Because Combine creates parallel branches, a mutable variable inside dist is shared
+//   across branch exploration order → UNSAFE for aggregations (e.g. running maxima). 
+//
+//   Builders:
+//   dist    : Free semiring (branching) – KEEP mutable state out; use for probability,
+//             Viterbi, Tropical, logic, provenance, counting, quantum amplitudes. 
+//
+// When to call explore:
+//   * After each dynamic-programming “layer” to collapse duplicate keys via (+) for efficiency
+//     (Viterbi, shortest paths, matrix ops, provenance polynomials).
+//   * Before interpreting results (normalizing probabilities, taking argmax/min, measuring quantum state).
+//
+// Observations (observe / constrain):
+//   Implemented by pruning failing branches (return Zero).
+//   Works uniformly across semirings: probability mass removed, impossible paths (Viterbi/Tropical)
+//   get weight Zero, logic failures drop, counting omits those paths, provenance excludes monomials.
+//
+// Quantum (Complex semiring):
+//   Superposition branches add complex amplitudes via (+); interference emerges automatically
+//   when explore collapses identical basis states.
+//
+// Linear algebra / tensor ops:
+//   Join indices with observe equality; explore performs the summations in the chosen semiring.
+//
+// Guidelines summary:
+//   1. Use dist for algebraic / exhaustive search & semiring reasoning. 
+//   2. Avoid mutation in dist; NEVER rely on side effects for semantics.
+//   3. Treat multiple returns as intentional alternatives; prefer explicit distribution/choice helpers for clarity.
+//   4. Insert explore strategically to enforce semiring addition and control blow‑up.
+//   5. Document which builder a module expects (consistency).
+//   6. For new semirings: ensure (+) associative/commutative, (*) associative, * distributes over +,
+//      Zero annihilates (*), One neutral for (*).
+// ============================================= 
+
 /// <summary>
 /// Defines the minimal algebraic structure needed for weights in the core probabilistic framework.
 /// </summary>
@@ -60,8 +163,41 @@ let inline reflect tree k =
             | (ContinuedSubTree m, p) -> ContinuedSubTree(memo (fun () -> makeChoices (force m))), p)
             ps
 
-    makeChoices tree: GenericProbabilitySpace<_, _>
+    makeChoices tree: GenericProbabilitySpace<_, _> 
  
+type GenericProbabilitySpaceBuilder() =
+    member inline _.Bind(space, k) = reflect space k
+    member inline _.Return v = always v
+    member inline _.ReturnFrom vs = vs: GenericProbabilitySpace<_, _>
+    member inline _.YieldFrom vs = vs: GenericProbabilitySpace<_, _>
+    member _.Zero() = []
+    // Disjunctive For: each iteration contributes alternatives (additive union)
+    member inline __.For
+        (sequence: seq<'a>, body: 'a -> GenericProbabilitySpace<'b,'W>) =
+        Seq.fold (fun acc x -> List.append acc (body x)) (__.Zero()) sequence
+    // Additive union (semiring +)
+    member _.Combine(a, b) = List.append a b
+    member inline _.Delay(f: unit -> GenericProbabilitySpace<'a,'W>) =
+        [ ContinuedSubTree(memo f), 'W.One ]
+    member inline b.Yield x = b.Return x
+    member inline this.While(guard, body) =
+        let rec loop () =
+            if guard() then this.Bind(body(), fun () -> loop()) else this.Zero()
+        loop()
+
+let dist = GenericProbabilitySpaceBuilder()
+
+
+// Helper (explicit choice if preferred over multiple returns)
+let inline choice a b = List.append a b
+let inline choices xs = List.fold List.append [] xs
+
+let inline observe test =
+    dist { if not test then return! fail () else return () }: GenericProbabilitySpace<_, 'w>
+
+let inline constrain test =
+    observe test: GenericProbabilitySpace<_, _>
+
 module GenericProbabilitySpace =
     /// Applies a function to every value in the probability space.
     let inline map f p =
@@ -90,52 +226,14 @@ module GenericProbabilitySpace =
                     // correctly deferred inside the new lazy thunk.
                     [ ContinuedSubTree(memo (fun () -> filterTree (force m))), weight ])
 
-        filterTree p
-
-
-type GenericProbabilitySpaceBuilder() =
-    member inline d.Bind(space, k) = reflect space k
-    member inline d.Return v = always v
-    member inline d.ReturnFrom vs = vs: GenericProbabilitySpace<_, _>
-    member inline d.YieldFrom vs = vs: GenericProbabilitySpace<_, _>
-    member d.Zero() = []
+        filterTree p  
     
-    member inline __.For
-        (sequence: seq<'a>, body: 'a -> GenericProbabilitySpace<'b, 'W>)
-        : GenericProbabilitySpace<'b, 'W> =
-        Seq.fold
-            (fun acc elem ->
-                let comp = body elem
-                List.append acc comp)
-            (__.Zero())
-            sequence
-
-    member __.Combine(x, y) = List.append x y
-    member inline __.Delay(f: unit -> GenericProbabilitySpace<'a, 'W>) = [ ContinuedSubTree(memo f), 'W.One ]
-    member inline l.Yield x = l.Return x
-
-    member inline __.While
-        (guard: unit -> bool, body: unit -> GenericProbabilitySpace<unit, 'W>)
-        : GenericProbabilitySpace<unit, 'W> =
-        if not (guard()) then
-            __.Zero()
-        else
-            __.Bind(__.Delay(body), fun () -> __.While(guard, body))
-
-let dist = GenericProbabilitySpaceBuilder()
-
-let inline observe test =
-    dist { if not test then return! fail () else return () }: GenericProbabilitySpace<_, 'w>
-
-let inline constrain test =
-    observe test: GenericProbabilitySpace<_, _>
-
-let inline filterDistribution f p : GenericProbabilitySpace<_, 'w> =
-    dist {
-        let! x = p
-        do! observe (f x)
-        return x
-    }
+    let inline filterDistribution f p : GenericProbabilitySpace<_, 'w> =
+        dist {
+            let! x = p
+            do! observe (f x)
+            return x
+        } 
 
 let inline explore<'T, 'W when Semiring<'W> and 'T: equality>
     (maxdepth: int option)
@@ -149,25 +247,18 @@ let inline explore<'T, 'W when Semiring<'W> and 'T: equality>
         (suspended_list: GenericProbabilitySpace<'T, 'W>)
         =
         match worklist with
-        | [] ->
-            // This level of the worklist is done
-            (answers_dict, suspended_list)
-
+        | [] -> (answers_dict, suspended_list) // This level of the worklist is done
         | (item, p) :: rest ->
-            let current_path_p = pcontrib * p
-
+            let current_path_p = pcontrib * p 
             match item with
             | Value v ->
                 // Found a final value, add it to the dictionary
-                let new_answers_dict = insertWithx (+) v current_path_p answers_dict
-                // Continue with the rest of this level
-                loop pcontrib depth rest new_answers_dict suspended_list
-
+                let new_answers_dict = insertWithx (+) v current_path_p answers_dict 
+                loop pcontrib depth rest new_answers_dict suspended_list // Continue with the rest of this level
             | ContinuedSubTree m ->
                 let should_go_down =
                     match maxdepth with
-                    | Some maxd -> depth < maxd
-                    | None -> true
+                    | Some maxd -> depth < maxd | None -> true
 
                 if should_go_down then
                     // Go deeper: explore the children from the forced memo
@@ -190,7 +281,7 @@ let inline explore<'T, 'W when Semiring<'W> and 'T: equality>
     // Combine the results: the values found and the computations that were suspended
     let final_values = [ for (KeyValue(v, p)) in final_answers -> (Value v, p) ]
 
-    List.append final_values suspended_computations
+    List.append final_values suspended_computations 
 
 let inline first_success<'T, 'W when Semiring<'W>>
     (toFloat: 'W -> float)
@@ -332,15 +423,13 @@ let inline forward_sample
         | None -> ()
 
     let t1 = System.DateTime.Now
-
     printfn
         "forward_sample: accepted %d / %d samples\nTime taken: %A seconds"
         num_accepted
         nsamples
         (round 3 ((t1 - t0).TotalSeconds))
 
-    if num_accepted = 0 then
-        []
+    if num_accepted = 0 then []
     else
         // Count the results and normalize to create the final posterior distribution.
         let total_accepted = float num_accepted
@@ -412,51 +501,48 @@ module Distributions =
         }
 
 
-//=========================================================
-//=========================================================
-//=========================================================
-//=========================================================
-//memoization test
+//=========================================================   
 
-let lazy_computation: Memo<GenericProbabilitySpace<_, _>> =
-    memo (fun () ->
-        printfn "Computing!"
-        [ Value 5, 1.0 ])
+let testdist = dist {
+    let! x = distribution [ (1, 0.5); (2, 0.25); (3,0.25) ]
+    printfn $"Expensive computation on {x}"
+    if x = 1 then return 'a'
+    else 
+        let! y = distribution ['b',0.5; 'c', 0.5 ]
+        printfn $"Another expensive computation on {y}"
+        return y 
+}
 
-let tree =
-    [ (ContinuedSubTree lazy_computation, 0.5)
-      (ContinuedSubTree lazy_computation, 0.5) ]
+explore (Some 6) testdist
 
-explore None tree
+let samples =
+    [ for i in 1..20 -> first_success id 9 testdist ]
+    |> List.choose id // Discard None results and unwrap the Some values
+    |> set
 
-//=========================================================
-// Correctness test for Memo vs. naive Lazy
+forward_sample 9 (random_selector false) id 1000 testdist 
+|> explore None
 
-printfn "\n--- Running Memo Correctness Test ---"
+let rec geometricAccumulator count = dist {
+    let! flip = distribution [true, 0.5; false, 0.5]
+    if flip then 
+        return count  // Success! Return number of failures
+    else 
+        return! geometricAccumulator (count + 1)  // Failure, try again
+}
 
-// This test ensures that memoization is not overly aggressive.
-// A naive implementation using System.Lazy inside the CE could fail this test
-// by caching the result for x=1 and incorrectly reusing it for x=2.
-let memo_correctness_test =
-    dist {
-        // 1. Start with two distinct values.
-        let! x = distribution [ (1, 0.5); (2, 0.5) ]
+geometricAccumulator 0 |> explore (Some 20) 
 
-        // 2. Create a dependent computation. The body of the memoized
-        //    function depends on the value of 'x'.
-        let dependent_computation =
-            memo (fun () ->
-                printfn "Performing computation for x = %d" x
-                [ Value(x * 10), 1.0 ])
+let rec infiniteCoin() = dist {
+    let! flip = distribution [true, 0.5; false, 0.5]
+    if flip then 
+        return 0
+    else
+        let! rest = infiniteCoin()
+        return 1 + rest
+}
 
-        // 3. Use the dependent computation in a ContinuedSubTree.
-        return! [ (ContinuedSubTree dependent_computation, 1.0) ]
-    }
-
-// 4. Explore the full tree.
-let memo_test_results = explore None memo_correctness_test
-
-printfn "Memo test results: %A" memo_test_results
+infiniteCoin() |> explore (Some 10)  
 
 //=========================================================
 // Sampling Correctness Test (Non-Deterministic Behavior)
@@ -475,11 +561,11 @@ let run_sampling_test () =
 
     // Run first_success multiple times and collect the results
     let samples =
-        [ for i in 1..num_samples -> first_success (fun p -> p) 5 sampling_dist ]
+        [ for i in 1..num_samples -> first_success id 5 sampling_dist ]
         |> List.choose id // Discard None results and unwrap the Some values
 
     let distinct_results = Set.ofList samples
-
+    
     samples
     |> List.countBy id
     |> List.iter (fun (v, count) -> printfn "Value: %A, Count: %d" v count)
@@ -572,6 +658,17 @@ dist {
     return true
 } |> explore None
 
+let posterior = rejection_sample_fn (first_success id 100) 1000 lazy_die_model
+ 
+let posterior2 = forward_sample 100 (random_selector false) id 1000 lazy_die_model
+
+printfn "Posterior distribution for the die type given a roll of 6:"
+printfn "%A" posterior
+
+explore None lazy_die_model |> List.normalizeWeights
+explore None posterior
+explore None posterior2 
+
 //=========================================================
 // METAMAGIC: EMPOWER VS. MAXIMIZE
 //=========================================================
@@ -599,6 +696,7 @@ let rec sumOfDice2 n =
             let! roll = d6 
             return! (GenericProbabilitySpace.map ((+) roll) (sumOfDice (n - 1)))
     }
+
 // The main model to compare the outcomes.
 let empowerIsBetter =
     dist {
@@ -620,29 +718,13 @@ let probability =
     //|> explore None
     |> forward_sample_fn 100 (random_selector false) id 6000
 
-printfn "For a 15d6 spell, Empower is better than Maximize %.2f%% of the time." (probability * 100.0)
-
-let posterior = rejection_sample_fn (first_success id 100) 1000 lazy_die_model
-
-
-let posterior2 = forward_sample 100 (random_selector false) id 1000 lazy_die_model
-
-printfn "Posterior distribution for the die type given a roll of 6:"
-printfn "%A" posterior
-
-explore None lazy_die_model |> List.normalizeWeights
-explore None posterior
-explore None posterior2
-// ===============================
+//printfn "For a 15d6 spell, Empower is better than Maximize %.2f%% of the time." (probability * 100.0)
 
 //=========================================================
 // METAMAGIC (EFFICIENT IMPLEMENTATION)
 //=========================================================
 
-printfn "\n--- D&D Metamagic: Empower vs. Maximize (15d6) - Efficient ---"
-
-// A single d6 roll as a uniform distribution of integers.
-let d6: GenericProbabilitySpace<int, float> = Distributions.uniform float [ 1..6 ]
+printfn "\n--- D&D Metamagic: Empower vs. Maximize (15d6) - Efficient ---" 
 
 /// <summary>
 /// Efficiently calculates the distribution of the sum of two integer distributions
@@ -1581,7 +1663,7 @@ printfn "The |1⟩ components destructively interfere and cancel out."
 let final_amplitudes = explore None hadamard_twice_circuit
 let final_probabilities = measure_fn hadamard_twice_circuit
 
-// ...existing code...
+
 /// <summary>
 /// The general Phase Shift gate P(φ).
 /// Applies a phase of e^(i*phi) to the |1> state, leaving |0> unchanged.
@@ -1636,7 +1718,7 @@ printfn "Amplitudes of Z(H|0>): %A" (explore None z_h_zero_state)
 printfn "Amplitudes of H|1> (for comparison): %A" (explore None h_one_state)
 
 // Expected output: The amplitudes for Z(H|0>) and H|1> should be identical.
-// ...existing code...
+
 /// <summary>
 /// The Ry gate, which rotates a qubit around the Y-axis of the Bloch sphere.
 /// This is key for creating arbitrary superpositions of |0> and |1>.
@@ -1792,8 +1874,7 @@ let rec ancestorB (x, y) : LogicProgram<unit> =
                 // If the recursive call succeeds, this path succeeds.
                 do! ancestorB (c, y) 
     }
- 
- 
+  
 /// A recursive rule to find ancestors.
 let rec ancestorC (x, y) : LogicProgram<unit> =
     dist {
@@ -1980,7 +2061,7 @@ ancestorU (Var "X") (Fun("peter", []))
     | _ -> None)
 |> Set.ofList
 
-// ...existing code...
+
 
 // grandparent(X,Y) :- parent(X,Z), parent(Z,Y).
 let grandparentU (x: Term) (y: Term) : LogicProgram<Subst> =
@@ -2028,10 +2109,10 @@ siblingU (Var "X") (Var "Y")
 |> Set.ofList
 |> printfn "Sibling pairs: %A"
 
-// ...existing code...
+
 
 // sibling(A,B) :- parent(P,A), parent(P,B), A ≠ B.
-let siblingU (x: Term) (y: Term) : LogicProgram<Subst> =
+let siblingU2 (x: Term) (y: Term) : LogicProgram<Subst> =
     dist {
         let p = Var "P"
         let! s1 = parentU p x
@@ -2106,7 +2187,7 @@ let cousinsOfPeter =
 
 printfn "Cousins of Peter: %A" cousinsOfPeter
 
-// ...existing code...
+
 
 // Gather all people from the facts (parents and children)
 let peopleAll =
@@ -2144,9 +2225,9 @@ let allCousins_rel =
 
 printfn "All cousin pairs (relational): %A" allCousins_rel
 
-// ...existing code...
 
-// ...existing code...
+
+
 
 // A Goal is a relation that, given a current Subst, produces new Substs (with Logic weights)
 type Goal = Subst -> LogicProgram<Subst * Subst>
@@ -2235,9 +2316,9 @@ cousinR (Var "X") (Fun("peter", []))
 |> Set.ofList
 |> printfn "Cousins of Peter: %A"
 
-// ...existing code...
 
-// ...existing code...
+
+
 // Structured terms as lists
 let Nil = Fun("nil", [])
 let Cons h t = Fun("cons", [ h; t ])
@@ -2354,9 +2435,9 @@ appendR (listOfAtoms [ "mary" ]) (Var "Y") (listOfAtoms [ "mary"; "paul"; "tom" 
     | _ -> None)
 |> Set.ofList
 |> printfn "Solve Y in append([mary], Y, [mary,paul,tom]): %A"
-// ...existing code...
 
-// ...existing code...
+
+
 
 // Vector as: distribution [ (index, value) ]
 // Matrix as: distribution [ ((row,col), value) ]
@@ -2427,7 +2508,7 @@ let showVec (x: GenericProbabilitySpace<int,float>) =
 let showMat (x: GenericProbabilitySpace<int*int,float>) =
     x |> List.sortBy (fun (Value (i,j),_) -> (i,j))
       |> List.map (fun (Value (i,j), w) -> sprintf "(%d,%d) -> %g" i j w)
-// ...existing code...
+
 
 // Tensor helpers (semiring-generalized einsum)
 
@@ -2558,3 +2639,110 @@ let gauss e = exp (-(e*e)/(2.0*sigma*sigma))
 let posteriorX =
     pullbackLikelihood (fun x -> float (x*x)) (fun y -> gauss (y - yObs)) priorX
     |> List.normalizeWeights
+
+
+//================================== 
+ 
+module LuckDSL =
+    open System 
+    let inline flatten (dist: GenericProbabilitySpace<'T, float>) =
+        dist
+        |> explore None
+        |> List.choose (fun (tree, weight) ->
+            match tree with
+            | Value v -> Some(v, weight)
+            | _ -> None)
+
+    let inline normalize weights =
+        let total = weights |> List.sumBy snd
+        if total <= 0.0 then invalidArg "weights" "Total probability must be positive."
+        weights |> List.map (fun (v, p) -> v, p / total)
+
+    let inline log2 x = Math.Log(x, 2.0)
+
+    let klDivergence baseDist targetDist =
+        let baseMap = baseDist |> dict
+        targetDist
+        |> List.fold (fun acc (value, p) ->
+            if p <= 0.0 then acc
+            else
+                match baseMap.TryGetValue value with
+                | true, q when q > 0.0 -> acc + p * log2 (p / q)
+                | _ -> Double.PositiveInfinity) 0.0
+
+    type LuckOption<'T> =
+        { Name: string
+          Distribution: GenericProbabilitySpace<'T, float>
+          KL: float
+          Cost: float }
+
+    let d6 : GenericProbabilitySpace<int, float> =
+        dist { return! Distributions.uniform float [ 1..6 ] }
+
+    let alwaysSix : GenericProbabilitySpace<int, float> =
+        dist { return 6 }
+
+    let bestOfTwo : GenericProbabilitySpace<int, float> =
+        dist {
+            let! first = d6
+            let! second = d6
+            return max first second
+        }
+
+    let bestOfThree =
+        dist {
+            let! a = d6
+            let! b = d6
+            let! c = d6
+            return max a (max b c)
+        }
+
+    let plusOneCapped : GenericProbabilitySpace<int, float> =
+        dist {
+            let! r = d6
+            return min (r + 1) 6
+        }
+
+    let uniform2to6 : GenericProbabilitySpace<int, float> =
+        dist { return! Distributions.uniform float [ 2..6 ] }
+    
+    let d20 : GenericProbabilitySpace<int, float> =
+        dist { return! Distributions.uniform float [ 1..20 ] }
+
+    let bestOfTwoD20 : GenericProbabilitySpace<int, float> =
+        dist {
+            let! first = d20
+            let! second = d20
+            return max first second
+        }
+
+    let createOption die name scaling target =
+        let baseNorm = die |> flatten |> normalize
+        let targetNorm = target |> flatten |> normalize
+        let kl = klDivergence baseNorm targetNorm
+        { Name = name
+          Distribution = target
+          KL = kl
+          Cost = scaling * kl }
+
+    let demo () =
+        let budget = 100.0
+
+        [ createOption d6 "Always 6" budget alwaysSix
+          createOption d20 "Always 20" budget (dist { return 20 })
+          createOption d6 "Best of two" budget bestOfTwo 
+          createOption d6 "Best of 3" budget bestOfThree
+          createOption d6 "+1 capped at 6" budget plusOneCapped
+          createOption d6 "Uniform [2..6]" budget uniform2to6
+          createOption d20 "Best of two d20" budget bestOfTwoD20 ]
+        |> List.iter (fun option ->
+            let distView =
+                option.Distribution
+                |> explore None
+                |> List.normalizeWeights
+            printfn "\nLuck option: %s" option.Name
+            printfn "KL divergence (bits): %.4f | Cost: %.2f" option.KL option.Cost
+            printfn "Effective distribution: %A" distView)
+ 
+LuckDSL.demo ()
+ 
