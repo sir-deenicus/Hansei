@@ -9,19 +9,32 @@ open Prelude.Collections.FibonacciHeap
 open Prelude.Collections 
 open System.Collections.Generic
 
-/// A thunk that memoises its result the first time it is forced.
-type Memo<'T> = private Memo of (unit -> 'T) * ref<option<'T>> 
+/// A thunk that can optionally memoise its result when it is forced.
+type Memo<'T> =
+    private
+    | Memoized of (unit -> 'T) * ref<option<'T>>
+    | Unmemoized of (unit -> 'T)
 
 let memo (f:unit -> 'T) : Memo<'T> =
-    Memo (f, ref None)
+    Memoized (f, ref None)
 
-let force (Memo (f, cell)) =
-    match cell.Value with
-    | Some v -> v
-    | None   ->
-        let v = f ()
-        cell.Value <- Some v
-        v
+/// Creates a thunk that does not memoise (trades memory for recomputation).
+let nomemo (f:unit -> 'T) : Memo<'T> =
+    Unmemoized f
+
+let inline memoWith memoize (f:unit -> 'T) : Memo<'T> =
+    if memoize then memo f else nomemo f
+
+let force m =
+    match m with
+    | Unmemoized f -> f ()
+    | Memoized (f, cell) ->
+        match cell.Value with
+        | Some v -> v
+        | None ->
+            let v = f ()
+            cell.Value <- Some v
+            v
 
 //////////////////////////////////////  
 
