@@ -30,11 +30,12 @@ open System.Numerics
 //   Multiple return / yield lines are ALTERNATIVES, NOT early exit.
 //   Duplicated branches scale weight in non‑idempotent semirings (Probability, Counting, Complex amplitudes).
 //   In idempotent semirings (Logic: OR, Viterbi: max, Tropical: min) duplicates are absorbed.
-//   For-Loop inside dist enumerates (adds) one branch per iteration (disjunction).
+//   For-Loop inside dist is SEQUENTIAL iteration (like Async/Task builders).
+//   Use `choose { ... }` / `alts { ... }` for disjunctive union over a sequence.
 //
 // Separation of concerns:
 //   Sequencing (AND)      => let! / Bind
-//   Branching  (OR/+)     => multiple returns / distribution / for over choices
+//   Branching  (OR/+)     => multiple returns / distribution / choose/alts over choices
 //
 // Mutation & backtracking:
 //   Because Combine creates parallel branches, a mutable variable inside dist is shared
@@ -128,21 +129,46 @@ type GenericProbabilitySpaceBuilder() =
     member inline _.ReturnFrom vs = vs: GenericProbabilitySpace<_, _>
     member inline _.YieldFrom vs = vs: GenericProbabilitySpace<_, _>
     member _.Zero() = []
-    // Disjunctive For: each iteration contributes alternatives (additive union)
-    member inline __.For
-        (sequence: seq<'a>, body: 'a -> GenericProbabilitySpace<'b,'W>) =
-        Seq.fold (fun acc x -> List.append acc (body x)) (__.Zero()) sequence
+    // Sequential For: iterate a deterministic container to sequence effects (AND), not to add alternatives (OR/+).
+    // For disjunction over a container, use `choose { ... }` / `alts { ... }` below.
+    member inline this.For(sequence: seq<'a>, body: 'a -> GenericProbabilitySpace<unit, 'W>) =
+        let items = Seq.toArray sequence
+
+        let rec loop i =
+            if i < items.Length then
+                this.Bind(body items[i], fun () -> loop (i + 1))
+            else
+                this.Return ()
+
+        loop 0
     // Additive union (semiring +)
     member _.Combine(a, b) = List.append a b
     member inline _.Delay(f: unit -> GenericProbabilitySpace<'a,'W>) =
         [ ContinuedSubTree(memo f), 'W.One ]
     member inline b.Yield x = b.Return x
+
     member inline this.While(guard, body) =
         let rec loop () =
-            if guard() then this.Bind(body(), fun () -> loop()) else this.Zero()
+            if guard() then this.Bind(body(), fun () -> loop()) else this.Return ()
         loop()
 
+/// Disjunctive builder: `for .. in .. do` enumerates alternatives (additive union / OR / semiring +).
+type GenericProbabilitySpaceChoiceBuilder() =
+    member inline _.Bind(space, k) = reflect space k
+    member inline _.Return v = always v
+    member inline _.ReturnFrom vs = vs: GenericProbabilitySpace<_, _>
+    member inline _.YieldFrom vs = vs: GenericProbabilitySpace<_, _>
+    member _.Zero() = []
+    member _.Combine(a, b) = List.append a b
+    member inline _.Delay(f: unit -> GenericProbabilitySpace<'a,'W>) =
+        [ ContinuedSubTree(memo f), 'W.One ]
+    member inline b.Yield x = b.Return x
+    member inline __.For(sequence: seq<'a>, body: 'a -> GenericProbabilitySpace<'b, 'W>) =
+        sequence |> Seq.collect body |> Seq.toList
+
 let dist = GenericProbabilitySpaceBuilder()
+let choose = GenericProbabilitySpaceChoiceBuilder()
+let alts = choose
 
 
 // Helper (explicit choice if preferred over multiple returns)
@@ -839,10 +865,13 @@ let pathStep (frontier: GenericProbabilitySpace<char, Tropical>) : GenericProbab
         // And for each of its neighbors...
         let neighbors = graph |> Map.tryFind currentNode |> Option.defaultValue []
 
-        for (neighbor, cost) in neighbors do
-            // ...return that neighbor. The framework's `*` operation (which is `+` for Tropical)
-            // will automatically add the edge `cost` to the `currentNode`'s path cost.
-            return! distribution [ (neighbor, Tropical cost) ]
+        return!
+            choose {
+                for (neighbor, cost) in neighbors do
+                    // ...return that neighbor. The framework's `*` operation (which is `+` for Tropical)
+                    // will automatically add the edge `cost` to the `currentNode`'s path cost.
+                    return! distribution [ (neighbor, Tropical cost) ]
+            }
     }
 
 /// <summary>
@@ -1024,19 +1053,21 @@ let emissionProbs =
 /// </summary>
 let viterbiStepLoop (observation: string) (prevState: string) : GenericProbabilitySpace<string, Viterbi> =
     dist {
-        // The `for` loop creates a distribution over all possible next states.
-        for nextState in states do
-            // Get the probability of transitioning to it
-            let trans_p = transitionProbs.[(prevState, nextState)]
-            // Get the probability of seeing the observation from it
-            let emit_p = emissionProbs.[(nextState, observation)]
+        // Disjunctive union over all possible next states.
+        return!
+            choose {
+                for nextState in states do
+                    // Get the probability of transitioning to it
+                    let trans_p = transitionProbs.[(prevState, nextState)]
+                    // Get the probability of seeing the observation from it
+                    let emit_p = emissionProbs.[(nextState, observation)]
 
-            // The weight is P(obs|next) * P(next|prev). This uses the Viterbi algebra's `*`.
-            let path_p = emit_p * trans_p
+                    // The weight is P(obs|next) * P(next|prev). This uses the Viterbi algebra's `*`.
+                    let path_p = emit_p * trans_p
 
-            // Return the next state as a possible path, weighted by its probability.
-            // The `for` loop will collect these into a single distribution.
-            return! distribution [ (nextState, path_p) ]
+                    // Return the next state as a possible path, weighted by its probability.
+                    return! distribution [ (nextState, path_p) ]
+            }
     }
 
 // To run it for the observation sequence, we build the chain declaratively.
@@ -1808,13 +1839,16 @@ let rec ancestor (x, y) : LogicProgram<unit> =
     // Rule 2: ancestor(X, Y) :- parent(X, Z), ancestor(Z, Y).
     let rule2 =
         dist {
-            for (p, c) in parent_db do
-                if p = x then
-                    // For each child `c` of `x`, recursively check if `c` is an ancestor of `y`.
-                    // The `do!` ensures that if the recursive call fails, this path is pruned.
-                    do! ancestor (c, y)
-                    // If the recursive call succeeds, this path succeeds.
-                    return ()
+            return!
+                choose {
+                    for (p, c) in parent_db do
+                        if p = x then
+                            // For each child `c` of `x`, recursively check if `c` is an ancestor of `y`.
+                            // The `do!` ensures that if the recursive call fails, this path is pruned.
+                            do! ancestor (c, y)
+                            // If the recursive call succeeds, this path succeeds.
+                            return ()
+                }
         }
 
     // Combine the results of the two rules with an OR relationship.
@@ -1824,12 +1858,15 @@ let rec ancestorB (x, y) : LogicProgram<unit> =
     // Rule 1: ancestor(X, Y) :- parent(X, Y). 
     dist {
         return! parent (x, y)
-        for (p, c) in parent_db do
-            if p = x then
-                // For each child `c` of `x`, recursively check if `c` is an ancestor of `y`.
-                // The `do!` ensures that if the recursive call fails, this path is pruned.
-                // If the recursive call succeeds, this path succeeds.
-                do! ancestorB (c, y) 
+        return!
+            choose {
+                for (p, c) in parent_db do
+                    if p = x then
+                        // For each child `c` of `x`, recursively check if `c` is an ancestor of `y`.
+                        // The `do!` ensures that if the recursive call fails, this path is pruned.
+                        // If the recursive call succeeds, this path succeeds.
+                        do! ancestorB (c, y)
+            }
     }
   
 /// A recursive rule to find ancestors.
@@ -1842,11 +1879,14 @@ let rec ancestorC (x, y) : LogicProgram<unit> =
 
         // ...and the branches generated by the `for` loop below.
         // Rule 2: ancestor(X, Y) :- parent(X, Z), ancestor(Z, Y).
-        for (p, c) in parent_db do
-            if p = x then
-                // This creates a new computation branch for each potential intermediate ancestor `c`.
-                // If the recursive call succeeds, this branch succeeds.
-                do! ancestorC (c, y)
+        return!
+            choose {
+                for (p, c) in parent_db do
+                    if p = x then
+                        // This creates a new computation branch for each potential intermediate ancestor `c`.
+                        // If the recursive call succeeds, this branch succeeds.
+                        do! ancestorC (c, y)
+            }
     }
 
 // --- Pose a Query ---
@@ -1911,11 +1951,14 @@ let rec ancestorProv (x, y) : GenericProbabilitySpace<bool, Prov> =
         // Base case
         return! parentProv (x, y)
         // Recursive case
-        for (p, c) in parent_db do
-            if p = x then
-                let! _ = parentProv (x, c)
-                let! _ = ancestorProv (c, y)
-                return true
+        return!
+            choose {
+                for (p, c) in parent_db do
+                    if p = x then
+                        let! _ = parentProv (x, c)
+                        let! _ = ancestorProv (c, y)
+                        return true
+            }
     }
 let rec ancestorProv2 (x, y) : GenericProbabilitySpace<bool, Prov> =
     dist {
@@ -1984,10 +2027,13 @@ let parentFacts =
 // Lift a fact with unification: parent(X,Y)
 let parentU (x: Term) (y: Term) : LogicProgram<Subst> =
   dist {
-    for (px, py) in parentFacts do
-      match unify x px Map.empty |> Option.bind (fun s1 -> unify (apply s1 y) py s1) with
-      | Some s -> return s
-      | None -> ()
+    return!
+        choose {
+            for (px, py) in parentFacts do
+                match unify x px Map.empty |> Option.bind (fun s1 -> unify (apply s1 y) py s1) with
+                | Some s -> return s
+                | None -> ()
+        }
   }
 
 // ancestor(X,Y) :- parent(X,Y).
@@ -1997,15 +2043,18 @@ let rec ancestorU (x: Term) (y: Term) : LogicProgram<Subst> =
     // Clause 1
     return! parentU x y
     // Clause 2
-    for (px, pz) in parentFacts do
-      // introduce a fresh Z and unify with parent(X,Z)
-      let z = Var "Z"
-      match unify x px Map.empty |> Option.bind (fun s1 -> unify (apply s1 z) pz s1) with
-      | Some s1 ->
-          // Continue with ancestor(Z,Y) under s1, returning composed substitutions
-          let! s2 = ancestorU (apply s1 z) (apply s1 y)
-          return (subst_union s1 s2) // Map union is simplistic; prefer left-biased merge after apply
-      | None -> ()
+    return!
+        choose {
+            for (px, pz) in parentFacts do
+                // introduce a fresh Z and unify with parent(X,Z)
+                let z = Var "Z"
+                match unify x px Map.empty |> Option.bind (fun s1 -> unify (apply s1 z) pz s1) with
+                | Some s1 ->
+                    // Continue with ancestor(Z,Y) under s1, returning composed substitutions
+                    let! s2 = ancestorU (apply s1 z) (apply s1 y)
+                    return (subst_union s1 s2) // Map union is simplistic; prefer left-biased merge after apply
+                | None -> ()
+        }
   }
 
 ancestorU (Var "X") (Fun("peter", []))
@@ -2108,27 +2157,33 @@ cousinU (Var "X") (Fun("peter", []))
 /// sibling(X,Y) succeeds if X and Y share a parent and are not the same person
 let sibling (x,y) : LogicProgram<unit> =
   dist {
-    for (p,c1) in parent_db do
-      if c1 = x then
-        for (p2,c2) in parent_db do
-          if p2 = p && c2 = y && x <> y then
-            return ()
+    return!
+        choose {
+            for (p, c1) in parent_db do
+                if c1 = x then
+                    for (p2, c2) in parent_db do
+                        if p2 = p && c2 = y && x <> y then
+                            return ()
+        }
   }
 
 /// cousin(X,Y) succeeds if X’s parent A and Y’s parent B are siblings
 let cousin (x,y) : LogicProgram<unit> =
   dist {
     // find A such that parent(A,X)
-    for (a, cx) in parent_db do
-      if cx = x then
-        // find B such that parent(B,Y)
-        for (b, cy) in parent_db do
-          if cy = y then
-            // require A and B to be siblings
-            do! sibling (a,b)
-            // and X≠Y to rule out “self-cousin”
-            do! observe (x <> y)
-            return ()
+    return!
+        choose {
+            for (a, cx) in parent_db do
+                if cx = x then
+                    // find B such that parent(B,Y)
+                    for (b, cy) in parent_db do
+                        if cy = y then
+                            // require A and B to be siblings
+                            do! sibling (a, b)
+                            // and X≠Y to rule out “self-cousin”
+                            do! observe (x <> y)
+                            return ()
+        }
   }
 
 // example query: who are the cousins of “peter”?
