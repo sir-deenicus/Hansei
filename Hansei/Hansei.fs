@@ -25,48 +25,75 @@ open Hansei.FSharpx.Collections
 type ProbabilitySpace<'T> = list<WeightedTree<'T> * float>
 and WeightedTree<'T> =
     | Value of 'T
-    | ContinuedSubTree of Lazy<ProbabilitySpace<'T>>
+    | ContinuedSubTree of Memo<ProbabilitySpace<'T>>
+
+type SubtreeMemoization =
+    | Memoize
+    | NoMemoize
+
+let inline subtreeMemoizationEnabled subtreeMemoization =
+    match subtreeMemoization with
+    | Memoize -> true
+    | NoMemoize -> false
+
+let private continuedSubTree subtreeMemoization f =
+    ContinuedSubTree (memoWith (subtreeMemoizationEnabled subtreeMemoization) f)
  
 //if use value instead of Continued, infinite computations will fail to return/terminate
-let distribution weightedlist : ProbabilitySpace<_> =
+let distributionWith subtreeMemoization weightedlist : ProbabilitySpace<_> =
     List.map (fun (v, p) -> 
-        ContinuedSubTree(lazy [Value v, 1.]), p) weightedlist 
+        continuedSubTree subtreeMemoization (fun () -> [Value v, 1.]), p) weightedlist 
 
-let inline distributionOfSeq weightedlist : ProbabilitySpace<_> =
+let distribution weightedlist : ProbabilitySpace<_> =
+    distributionWith Memoize weightedlist
+
+let distributionOfSeqWith subtreeMemoization weightedlist : ProbabilitySpace<_> =
     List.map (fun (v, p) -> 
-        ContinuedSubTree(lazy [Value v, 1.]), float p) (List.ofSeq weightedlist)
+        continuedSubTree subtreeMemoization (fun () -> [Value v, 1.]), float p) (List.ofSeq weightedlist)
+
+let distributionOfSeq weightedlist : ProbabilitySpace<_> =
+    distributionOfSeqWith Memoize weightedlist
+
+let alwaysWith subtreeMemoization x : ProbabilitySpace<_> =
+    distributionWith subtreeMemoization [x, 1.]
 
 let always x : ProbabilitySpace<_> =
-    distribution [x, 1.]
+    alwaysWith Memoize x
 
-let exactly x = distribution [ x, 1. ]
+let exactlyWith subtreeMemoization x = distributionWith subtreeMemoization [ x, 1. ]
+
+let exactly x = exactlyWith Memoize x
 
 let fail () : ProbabilitySpace<_> = []
 
-let reflect tree k =
+let reflectWith subtreeMemoization tree k =
     let rec make_choices pv =
         List.map
             (function
-            | (Value x, p) -> ContinuedSubTree(lazy (k x)), p
-            | (ContinuedSubTree (Lazy t), p) -> ContinuedSubTree(lazy (make_choices t)), p)
+            | (Value x, p) -> continuedSubTree subtreeMemoization (fun () -> k x), p
+            | (ContinuedSubTree t, p) -> continuedSubTree subtreeMemoization (fun () -> make_choices (force t)), p)
             pv
 
     make_choices tree: ProbabilitySpace<_>
+
+let reflect tree k = reflectWith Memoize tree k
   
-type ProbabilitySpaceBuilder() =
-    member inline d.Bind(space, k) = reflect space k
-    member d.Return v = always v
+type ProbabilitySpaceBuilder(?subtreeMemoization) =
+    let subtreeMemoization = defaultArg subtreeMemoization Memoize
+
+    member d.Bind(space, k) = reflectWith subtreeMemoization space k
+    member d.Return v = alwaysWith subtreeMemoization v
     member d.ReturnFrom vs : ProbabilitySpace<_> = vs
     member inline _.YieldFrom vs: ProbabilitySpace<_>  = vs 
     member d.BindReturn(p: ProbabilitySpace<'a>, f: 'a -> 'b) : ProbabilitySpace<_> = 
-        reflect p (f >> always)
+        reflectWith subtreeMemoization p (f >> alwaysWith subtreeMemoization)
     member d.Zero() = []
     member d.Combine(x, y) = List.append x y
 
     member d.Yield x = d.Return x
      
     member _.Delay(f: unit -> ProbabilitySpace<_>) =
-        [ ContinuedSubTree(lazy (f ())), 1. ] 
+        [ continuedSubTree subtreeMemoization f, 1. ] 
 
     member this.While(guard: unit -> bool, body: unit -> ProbabilitySpace<unit>) : ProbabilitySpace<unit> =
         if guard () then
@@ -74,17 +101,18 @@ type ProbabilitySpaceBuilder() =
         else
             this.Return ()
 
-    member this.For(sequence: seq<'a>, body: 'a -> ProbabilitySpace<unit>) : ProbabilitySpace<unit> =
+    member this.For(sequence: seq<'a>, body: 'a -> ProbabilitySpace<'b>) : ProbabilitySpace<unit> =
         let items = Seq.toList sequence
 
         let rec loop remaining =
             match remaining with
             | [] -> this.Return ()
-            | x :: rest -> this.Bind(body x, fun () -> loop rest)
+            | x :: rest -> this.Bind(body x, fun _ -> loop rest)
 
         this.Delay(fun () -> loop items)
 
 let dist = ProbabilitySpaceBuilder()
+let distNoMemo = ProbabilitySpaceBuilder(NoMemoize)
 
 let observe test : ProbabilitySpace<_> =
     dist {
@@ -99,6 +127,36 @@ let soft_observe weight : ProbabilitySpace<unit> =
     elif weight = 0.0 then
         fail ()
     else [ Value (), weight ]
+
+let factor weight : ProbabilitySpace<unit> =
+    soft_observe weight
+
+/// Exactly integrate a finite local model into a single likelihood factor.
+/// This is useful when a small latent submodel can be summed out analytically
+/// instead of sampled and rejected later.
+let exact_local_likelihood likelihood (localModel: ProbabilitySpace<'T>) : ProbabilitySpace<unit> =
+    let rec totalLocalWeight pathWeight choices =
+        choices
+        |> List.sumBy (fun (node, branchWeight) ->
+            let combinedWeight = pathWeight * branchWeight
+
+            match node with
+            | Value value ->
+                let likelihoodWeight = likelihood value
+
+                if Double.IsNaN likelihoodWeight || Double.IsInfinity likelihoodWeight || likelihoodWeight < 0.0 then
+                    invalidArg (nameof likelihood) "exact_local_likelihood requires finite non-negative local likelihoods."
+
+                combinedWeight * likelihoodWeight
+            | ContinuedSubTree next -> totalLocalWeight combinedWeight (force next))
+
+    let totalWeight =
+        totalLocalWeight 1.0 localModel
+
+    factor totalWeight
+
+let exact_local_observe test (localModel: ProbabilitySpace<'T>) : ProbabilitySpace<unit> =
+    exact_local_likelihood (fun value -> if test value then 1.0 else 0.0) localModel
 
 let constrain test = observe test
 
@@ -200,12 +258,12 @@ let explore (maxdepth: int option) (choices: ProbabilitySpace<'T>) =
         | _, [], answers -> answers
         | _, ((Value v, pt) :: rest), (ans, susp) ->
             loop p depth down rest (insertWithx (+) v (pt * p) ans, susp)
-        | true, ((ContinuedSubTree (Lazy t), pt) :: rest), answers ->
+        | true, ((ContinuedSubTree t, pt) :: rest), answers ->
             let down' =
                 Option.map (fun x -> depth < x) maxdepth
                 |> Option.defaultValue true
 
-            loop (pt * p) (depth + 1) down' t answers
+            loop (pt * p) (depth + 1) down' (force t) answers
             |> loop p depth true rest
 
         | (down, ((c, pt) :: rest), (ans, susp)) -> loop p depth down rest (ans, (c, pt * p) :: susp)
@@ -235,7 +293,7 @@ let private shallow_explore_with_budget
     let rec collapse_singleton depth ps choices =
         match choices with
         | _ when depth >= singletonUnravelLimit -> Choice2Of2(choices, ps, true)
-        | [ContinuedSubTree (Lazy next), p] -> collapse_singleton (depth + 1) (p * ps) next
+        | [ContinuedSubTree next, p] -> collapse_singleton (depth + 1) (p * ps) (force next)
         | [Value v, p] -> Choice1Of2(v, p * ps)
         | _ -> Choice2Of2(choices, ps, false)
 
@@ -265,12 +323,12 @@ let private shallow_explore_with_budget
             let acc, retainedMass, retainedCount = retain_remaining acc retainedMass retainedCount remaining
             ans, acc, retainedMass, retainedCount, expandedNodes
         | ((Value v, p) :: rest) -> loop pc (add_answer (p * pc) v ans) acc retainedMass retainedCount expandedNodes rest
-        | ((ContinuedSubTree (Lazy t), p) :: rest) ->
-            match collapse_singleton 0 p t with
+        | ((ContinuedSubTree t, p) :: rest) ->
+            match collapse_singleton 0 p (force t) with
             | Choice1Of2 (v, p1) -> loop pc (add_answer (p1 * pc) v ans) acc retainedMass retainedCount expandedNodes rest
             | Choice2Of2 ([], _, _) -> loop pc ans acc retainedMass retainedCount expandedNodes rest
             | Choice2Of2 (collapsedChoices, branchMass, _) when expandedNodes >= maxExpandedNodes ->
-                let acc, retainedMass, retainedCount = retain_choice acc retainedMass retainedCount (ContinuedSubTree(lazy collapsedChoices)) branchMass
+                let acc, retainedMass, retainedCount = retain_choice acc retainedMass retainedCount (continuedSubTree Memoize (fun () -> collapsedChoices)) branchMass
                 loop pc ans acc retainedMass retainedCount expandedNodes rest
             | Choice2Of2 (collapsedChoices, branchMass, _) ->
                 let (ans, ch, childMass, _, expandedNodes) =
@@ -281,9 +339,9 @@ let private shallow_explore_with_budget
                         acc, retainedMass, retainedCount
                     else if childMass < nearly_one then
                         let ch' = normalize_choices childMass ch
-                        retain_choice acc retainedMass retainedCount (ContinuedSubTree(lazy ch')) (branchMass * childMass)
+                        retain_choice acc retainedMass retainedCount (continuedSubTree Memoize (fun () -> ch')) (branchMass * childMass)
                     else
-                        retain_choice acc retainedMass retainedCount (ContinuedSubTree(lazy ch)) branchMass
+                        retain_choice acc retainedMass retainedCount (continuedSubTree Memoize (fun () -> ch)) branchMass
 
                 loop pc ans acc retainedMass retainedCount expandedNodes rest
 
@@ -488,42 +546,9 @@ let inline private addWeightedAnswer pcontrib ans v p =
 let rec private collapseForcedPathBounded singletonUnravelLimit depth ps collapsedPrefix choices =
     match choices with
     | _ when depth >= singletonUnravelLimit -> Choice2Of2(choices, ps, collapsedPrefix)
-    | [ContinuedSubTree (Lazy next), p] -> collapseForcedPathBounded singletonUnravelLimit (depth + 1) (p * ps) true next
+    | [ContinuedSubTree next, p] -> collapseForcedPathBounded singletonUnravelLimit (depth + 1) (p * ps) true (force next)
     | [Value v, p] -> Choice1Of2(v, p * ps)
     | _ -> Choice2Of2(choices, ps, collapsedPrefix)
-
-let private sample_dist_stratified_core runSampler nsamples epsilon ch =
-    if nsamples <= 0 then
-        invalidArg (nameof nsamples) "nsamples must be positive."
-    elif epsilon < 0.0 || epsilon > 1.0 || Double.IsNaN epsilon then
-        invalidArg (nameof epsilon) "epsilon must be in the inclusive range [0.0, 1.0]."
-    elif List.isEmpty ch then
-        []
-    else
-        let heavyBranches, totalHeavyP, lightBranches, totalLightP = partitionRootStrata epsilon ch
-        let overallTotalP = totalHeavyP + totalLightP
-
-        if overallTotalP <= 0.0 then
-            []
-        else
-            let heavySamples, lightSamples = allocateStratifiedSamples nsamples totalHeavyP totalLightP
-
-            let combinedDist = Dict<_, _>()
-
-            if heavySamples > 0 && not (List.isEmpty heavyBranches) then
-                runSampler heavySamples heavyBranches
-                |> fun results -> mergeScaledResults totalHeavyP results combinedDist
-
-            if lightSamples > 0 && not (List.isEmpty lightBranches) then
-                runSampler lightSamples lightBranches
-                |> fun results -> mergeScaledResults totalLightP results combinedDist
-
-            let finalTotalP = combinedDist.Values |> Seq.sum
-
-            if finalTotalP <= 0.0 then
-                []
-            else
-                [ for (KeyValue(v, p)) in combinedDist -> Value v, p / finalTotalP ]
 
 
 let sample_path selector subsample nsamples ch =
@@ -598,8 +623,8 @@ let beam_search beamwidth maxDepth maxExpandedNodes ch =
     let expandNode (frontier: ResizeArray<_>) =
         function
         | (Value v, p) -> insertTopCandidate frontier (Value v, p)
-        | (ContinuedSubTree (Lazy t), p) ->
-            match collapseForcedPathBounded defaultSingletonUnravelLimit 0 p false t with
+        | (ContinuedSubTree t, p) ->
+            match collapseForcedPathBounded defaultSingletonUnravelLimit 0 p false (force t) with
             | Choice1Of2 (v, p1) -> insertTopCandidate frontier (Value v, p1)
             | Choice2Of2 ([], _, _) -> ()
             | Choice2Of2 (choices, forcedMass, _) ->
@@ -656,9 +681,9 @@ let private sample_dist_with_mass_budget subsample nsamples max_pre_explore_dept
             | (Value v, p) :: rest ->
                 addWeightedAnswer pcontrib ans v p |> ignore
                 collect acc rest
-            | (ContinuedSubTree (Lazy t), p) :: rest ->
+            | (ContinuedSubTree t, p) :: rest ->
                 let acc =
-                    match collapseForcedPathBounded defaultSingletonUnravelLimit 0 p false t with
+                    match collapseForcedPathBounded defaultSingletonUnravelLimit 0 p false (force t) with
                     | Choice1Of2 (v, p1) ->
                         addWeightedAnswer pcontrib ans v p1 |> ignore
                         acc
@@ -697,7 +722,7 @@ let private sample_dist_with_mass_budget subsample nsamples max_pre_explore_dept
         function
         | [Value v, p] -> addWeightedAnswer pcontrib ans v p
         | [] -> ans
-        | [ContinuedSubTree (Lazy th), p] -> loop (depth + 1) (p * pcontrib) ans th
+        | [ContinuedSubTree th, p] -> loop (depth + 1) (p * pcontrib) ans (force th)
         | ch when depth < maxdepth -> (* choosing one thread randomly *)
             match prepareFrontier pcontrib ans (subsample ch) with
             | (ans, []) -> ans
@@ -745,128 +770,19 @@ let private sample_dist_with_mass_budget subsample nsamples max_pre_explore_dept
 let sample_dist subsample nsamples max_pre_explore_depth maxdepth selector (ch: ProbabilitySpace<_>) =
     sample_dist_with_mass_budget subsample nsamples max_pre_explore_depth 0.0 maxdepth selector ch
 
-let private sample_dist_importance_with_mass_budget subsample nsamples max_pre_explore_depth pre_explore_min_mass maxdepth (selector: ImportanceSelector<_>) (ch: ProbabilitySpace<_>) =
-    if nsamples <= 0 then
-        invalidArg (nameof nsamples) "nsamples must be positive."
-    elif Double.IsNaN pre_explore_min_mass || pre_explore_min_mass < 0.0 then
-        invalidArg (nameof pre_explore_min_mass) "pre_explore_min_mass must be finite and non-negative."
-
-    let selectPreparedFrontier (frontier: ResizeArray<ProbabilitySpace<_> * float>) =
-        if frontier.Count = 0 then
-            None
-        elif frontier.Count = 1 then
-            Some frontier.[0]
-        else
-            selector frontier
-
-    let sumChoiceMass choices =
-        let rec loop total =
-            function
-            | [] -> total
-            | (_, p) :: rest -> loop (total + p) rest
-
-        loop 0.0 choices
-
-    let normalizeChoices ptotal choices =
-        let invPtotal = 1.0 / ptotal
-
-        let rec loop acc =
-            function
-            | [] -> List.rev acc
-            | (x, p) :: rest -> loop ((x, p * invPtotal) :: acc) rest
-
-        loop [] choices
-
-    let prepareFrontier pcontrib ans choices =
-        let frontier = ResizeArray<ProbabilitySpace<_> * float>()
-
-        let rec collect remaining =
-            match remaining with
-            | [] -> ans, frontier
-            | (Value v, p) :: rest ->
-                addWeightedAnswer pcontrib ans v p |> ignore
-                collect rest
-            | (ContinuedSubTree (Lazy t), p) :: rest ->
-                let addPending pendingChoices correction =
-                    frontier.Add(pendingChoices, correction)
-
-                match collapseForcedPathBounded defaultSingletonUnravelLimit 0 p false t with
-                | Choice1Of2 (v, p1) -> addWeightedAnswer pcontrib ans v p1 |> ignore
-                | Choice2Of2 (_ch, branchCorrection, collapsedPrefix) ->
-                    let sampled = subsample _ch
-
-                    match sampled with
-                    | [] -> ()
-                    | _ ->
-                        let retainedMass = sumChoiceMass sampled
-
-                        if retainedMass > 0.0 then
-                            match collapseForcedPathBounded defaultSingletonUnravelLimit 0 branchCorrection collapsedPrefix sampled with
-                            | Choice1Of2 (v, p1) -> addWeightedAnswer pcontrib ans v p1 |> ignore
-                            | Choice2Of2 (pendingChoices, correction, pendingCollapsedPrefix) ->
-                                if retainedMass < nearly_one && not pendingCollapsedPrefix then
-                                    addPending (normalizeChoices retainedMass pendingChoices) (correction * retainedMass)
-                                else if retainedMass < nearly_one && pendingCollapsedPrefix then
-                                    addPending pendingChoices correction
-                                else
-                                    addPending pendingChoices correction
-
-                collect rest
-
-        collect choices
-
-    let rec loop depth pcontrib (ans: Dict<_, _>) =
-        function
-        | [Value v, p] -> addWeightedAnswer pcontrib ans v p
-        | [] -> ans
-        | [ContinuedSubTree (Lazy th), p] -> loop (depth + 1) (p * pcontrib) ans th
-        | ch when depth < maxdepth ->
-            match prepareFrontier pcontrib ans (subsample ch) with
-            | ans, frontier when frontier.Count = 0 -> ans
-            | ans, frontier ->
-                match selectPreparedFrontier frontier with
-                | None -> ans
-                | Some (th, correction) -> loop (depth + 1) (pcontrib * correction) ans th
-        | _ -> ans
-
-    let toploop pcontrib frontier ans =
-        match selectPreparedFrontier frontier with
-        | None -> ans
-        | Some (th, correction) -> loop 0 (pcontrib * correction) ans th
-
-    let sample_runner samples th count =
-        let mutable current = samples
-
-        for _ in 1 .. count do
-            current <- th current
-
-        current
-
-    let driver pcontrib vals frontier =
-        let ans = sample_runner (Dict()) (toploop pcontrib frontier) nsamples
-        let ns = float nsamples
-
-        for (KeyValue (v, p)) in vals do
-            insertWithx (+) v (ns * p) ans |> ignore
-
-        printfn "sample_importance: done %d worlds\n" nsamples
-        [ for (KeyValue (v, p)) in ans -> Value v, p / ns ]
-
-    let rec pre_explore depth pcontrib ans current =
-        match prepareFrontier pcontrib ans (subsample current) with
-        | ans, frontier when frontier.Count = 0 ->
-            [ for (KeyValue (v, p)) in ans -> Value v, p ]
-        | ans, frontier when frontier.Count = 1 && depth < max_pre_explore_depth ->
-            let nextChoices, correction = frontier.[0]
-            if (pcontrib * correction) >= pre_explore_min_mass then
-                pre_explore (depth + 1) (pcontrib * correction) ans nextChoices
-            else
-                driver pcontrib ans frontier
-        | ans, frontier -> driver pcontrib ans frontier
-
-    pre_explore 0 1.0 (Dict()) ch 
-
-let private sample_dist_importance_prepared_with_mass_budget subsample nsamples max_pre_explore_depth pre_explore_min_mass maxdepth (selector: PreparedFrontierSelector<_>) (ch: ProbabilitySpace<_>) =
+let inline private sample_dist_importance_core
+    (createFrontier: int -> 'Frontier)
+    (addPending: ProbabilitySpace<'T> -> float -> 'Frontier -> unit)
+    (frontierCount: 'Frontier -> int)
+    (getSingleton: 'Frontier -> ProbabilitySpace<'T> * float)
+    (selectFrontier: 'Frontier -> option<ProbabilitySpace<'T> * float>)
+    (subsample: ProbabilitySpace<'T> -> ProbabilitySpace<'T>)
+    nsamples
+    max_pre_explore_depth
+    pre_explore_min_mass
+    maxdepth
+    (ch: ProbabilitySpace<'T>)
+    =
     if nsamples <= 0 then
         invalidArg (nameof nsamples) "nsamples must be positive."
     elif Double.IsNaN pre_explore_min_mass || pre_explore_min_mass < 0.0 then
@@ -891,7 +807,7 @@ let private sample_dist_importance_prepared_with_mass_budget subsample nsamples 
         loop [] choices
 
     let prepareFrontier pcontrib ans choices =
-        let frontier = createPreparedFrontier 4
+        let frontier = createFrontier 4
 
         let rec collect remaining =
             match remaining with
@@ -899,11 +815,8 @@ let private sample_dist_importance_prepared_with_mass_budget subsample nsamples 
             | (Value v, p) :: rest ->
                 addWeightedAnswer pcontrib ans v p |> ignore
                 collect rest
-            | (ContinuedSubTree (Lazy t), p) :: rest ->
-                let addPending pendingChoices correction =
-                    addPreparedFrontierChoice pendingChoices correction frontier
-
-                match collapseForcedPathBounded defaultSingletonUnravelLimit 0 p false t with
+            | (ContinuedSubTree t, p) :: rest ->
+                match collapseForcedPathBounded defaultSingletonUnravelLimit 0 p false (force t) with
                 | Choice1Of2 (v, p1) -> addWeightedAnswer pcontrib ans v p1 |> ignore
                 | Choice2Of2 (_ch, branchCorrection, collapsedPrefix) ->
                     let sampled = subsample _ch
@@ -918,11 +831,11 @@ let private sample_dist_importance_prepared_with_mass_budget subsample nsamples 
                             | Choice1Of2 (v, p1) -> addWeightedAnswer pcontrib ans v p1 |> ignore
                             | Choice2Of2 (pendingChoices, correction, pendingCollapsedPrefix) ->
                                 if retainedMass < nearly_one && not pendingCollapsedPrefix then
-                                    addPending (normalizeChoices retainedMass pendingChoices) (correction * retainedMass)
+                                    addPending (normalizeChoices retainedMass pendingChoices) (correction * retainedMass) frontier
                                 else if retainedMass < nearly_one && pendingCollapsedPrefix then
-                                    addPending pendingChoices correction
+                                    addPending pendingChoices correction frontier
                                 else
-                                    addPending pendingChoices correction
+                                    addPending pendingChoices correction frontier
 
                 collect rest
 
@@ -932,18 +845,18 @@ let private sample_dist_importance_prepared_with_mass_budget subsample nsamples 
         function
         | [Value v, p] -> addWeightedAnswer pcontrib ans v p
         | [] -> ans
-        | [ContinuedSubTree (Lazy th), p] -> loop (depth + 1) (p * pcontrib) ans th
+        | [ContinuedSubTree th, p] -> loop (depth + 1) (p * pcontrib) ans (force th)
         | ch when depth < maxdepth ->
             match prepareFrontier pcontrib ans (subsample ch) with
-            | ans, frontier when frontier.Count = 0 -> ans
+            | ans, frontier when frontierCount frontier = 0 -> ans
             | ans, frontier ->
-                match selector frontier with
+                match selectFrontier frontier with
                 | None -> ans
                 | Some (th, correction) -> loop (depth + 1) (pcontrib * correction) ans th
         | _ -> ans
 
     let toploop pcontrib frontier ans =
-        match selector frontier with
+        match selectFrontier frontier with
         | None -> ans
         | Some (th, correction) -> loop 0 (pcontrib * correction) ans th
 
@@ -967,12 +880,10 @@ let private sample_dist_importance_prepared_with_mass_budget subsample nsamples 
 
     let rec pre_explore depth pcontrib ans current =
         match prepareFrontier pcontrib ans (subsample current) with
-        | ans, frontier when frontier.Count = 0 ->
+        | ans, frontier when frontierCount frontier = 0 ->
             [ for (KeyValue (v, p)) in ans -> Value v, p ]
-        | ans, frontier when frontier.Count = 1 && depth < max_pre_explore_depth ->
-            let nextChoices = frontier.Choices.[0]
-            let correction = frontier.Corrections.[0]
-
+        | ans, frontier when frontierCount frontier = 1 && depth < max_pre_explore_depth ->
+            let nextChoices, correction = getSingleton frontier
             if (pcontrib * correction) >= pre_explore_min_mass then
                 pre_explore (depth + 1) (pcontrib * correction) ans nextChoices
             else
@@ -981,69 +892,111 @@ let private sample_dist_importance_prepared_with_mass_budget subsample nsamples 
 
     pre_explore 0 1.0 (Dict()) ch
 
+let private sample_dist_importance_with_mass_budget subsample nsamples max_pre_explore_depth pre_explore_min_mass maxdepth (selector: ImportanceSelector<_>) (ch: ProbabilitySpace<_>) =
+    let createFrontier _ = ResizeArray<ProbabilitySpace<_> * float>()
+    let addPending pendingChoices correction (frontier: ResizeArray<ProbabilitySpace<_> * float>) =
+        frontier.Add(pendingChoices, correction)
+    let frontierCount (frontier: ResizeArray<ProbabilitySpace<_> * float>) = frontier.Count
+    let getSingleton (frontier: ResizeArray<ProbabilitySpace<_> * float>) = frontier.[0]
+    let selectFrontier (frontier: ResizeArray<ProbabilitySpace<_> * float>) =
+        if frontier.Count = 0 then
+            None
+        elif frontier.Count = 1 then
+            Some frontier.[0]
+        else
+            selector frontier
+
+    sample_dist_importance_core
+        createFrontier
+        addPending
+        frontierCount
+        getSingleton
+        selectFrontier
+        subsample
+        nsamples
+        max_pre_explore_depth
+        pre_explore_min_mass
+        maxdepth
+        ch
+
+let private sample_dist_importance_prepared_with_mass_budget subsample nsamples max_pre_explore_depth pre_explore_min_mass maxdepth (selector: PreparedFrontierSelector<_>) (ch: ProbabilitySpace<_>) =
+    let frontierCount (frontier: PreparedFrontier<_>) = frontier.Count
+    let getSingleton (frontier: PreparedFrontier<_>) = frontier.Choices.[0], frontier.Corrections.[0]
+
+    sample_dist_importance_core
+        createPreparedFrontier
+        addPreparedFrontierChoice
+        frontierCount
+        getSingleton
+        selector
+        subsample
+        nsamples
+        max_pre_explore_depth
+        pre_explore_min_mass
+        maxdepth
+        ch
+
 let sample_dist_importance subsample nsamples max_pre_explore_depth maxdepth (selector: ImportanceSelector<_>) (ch: ProbabilitySpace<_>) =
     sample_dist_importance_with_mass_budget subsample nsamples max_pre_explore_depth 0.0 maxdepth selector ch
-    
-
-/// <summary>
-/// A top-level stratified wrapper around the importance sampler.
-/// It partitions the initial frontier into two strata and allocates samples across them.
-/// </summary>
-/// <param name="subsample">Function to select a subset of branches at each step.</param>
-/// <param name="nsamples">The TOTAL number of samples to run across all strata.</param>
-/// <param name="maxdepth">The maximum recursion depth for exploration.</param>
-/// <param name="selector">Function to select one branch to follow from a list of continuations.</param>
-/// <param name="epsilon">The top-level probability threshold used to separate "heavy" from "light" branches.</param>
-/// <param name="ch">The initial probability space to sample from.</param>
-/// <returns>A normalized probability distribution as a list of (Value, probability) pairs.</returns>
-let sample_dist_stratified subsample nsamples max_pre_explore_depth maxdepth selector (epsilon: float) (ch: ProbabilitySpace<_>) =
-    sample_dist_stratified_core
-        (fun sampleCount branches ->
-            sample_dist subsample sampleCount max_pre_explore_depth maxdepth selector branches)
-        nsamples
-        epsilon
-        ch
-
-/// <summary>
-/// A top-level stratified wrapper around the fast importance sampler.
-/// It partitions the initial frontier into two strata and allocates samples across them.
-/// </summary>
-/// <param name="subsample">Function to select a subset of branches at each step.</param>
-/// <param name="nsamples">The TOTAL number of samples to run across all strata.</param>
-/// <param name="maxdepth">The maximum recursion depth for exploration.</param>
-/// <param name="selector">Selector over prepared continuation frontiers with explicit correction factors.</param>
-/// <param name="epsilon">The top-level probability threshold used to separate "heavy" from "light" branches.</param>
-/// <param name="ch">The initial probability space to sample from.</param>
-/// <returns>A normalized probability distribution as a list of (Value, probability) pairs.</returns>
-let sample_dist_importance_stratified subsample nsamples max_pre_explore_depth maxdepth (selector: ImportanceSelector<_>) (epsilon: float) (ch: ProbabilitySpace<_>) =
-    sample_dist_stratified_core
-        (fun sampleCount branches ->
-            sample_dist_importance subsample sampleCount max_pre_explore_depth maxdepth selector branches)
-        nsamples
-        epsilon
-        ch
 
 //=================
 ///////////////////
-let sample_importanceAux subsample selector pre_explore_maxdepth pre_explore_min_mass shallow_explore_max_nodes shallow_explore_max_frontier maxdpeth nsamples distr =
-    sample_dist_with_mass_budget
-        subsample
-        nsamples
-        pre_explore_maxdepth
-        pre_explore_min_mass
-        maxdpeth
-        selector
-        (shallow_explore_with_budget subsample shallow_explore_max_nodes shallow_explore_max_frontier distr)
+type private ImportanceSamplingConfig<'T> =
+    {
+        Subsample: ProbabilitySpace<'T> -> ProbabilitySpace<'T>
+        UsePreExplore: bool
+        PreExploreDepth: int
+        PreExploreMinMass: float
+        ShallowExploreMaxNodes: int option
+        ShallowExploreMaxFrontier: int option
+    }
 
-let private sample_importanceFastAux subsample selector pre_explore_maxdepth pre_explore_min_mass shallow_explore_max_nodes shallow_explore_max_frontier maxdpeth nsamples distr =
-    sample_dist_importance_prepared_with_mass_budget
-        subsample
-        nsamples
-        pre_explore_maxdepth
-        pre_explore_min_mass
-        maxdpeth
-        selector
-        (shallow_explore_with_budget subsample shallow_explore_max_nodes shallow_explore_max_frontier distr)
+let private createImportanceSamplingConfig usePreExplore subsample preExploreDepth preExploreMinMass shallowExploreMaxNodes shallowExploreMaxFrontier =
+    {
+        Subsample = subsample
+        UsePreExplore = usePreExplore
+        PreExploreDepth = preExploreDepth
+        PreExploreMinMass = preExploreMinMass
+        ShallowExploreMaxNodes = shallowExploreMaxNodes
+        ShallowExploreMaxFrontier = shallowExploreMaxFrontier
+    }
+
+let private shallowPreExplore (config: ImportanceSamplingConfig<'T>) distr =
+    shallow_explore_with_budget config.Subsample config.ShallowExploreMaxNodes config.ShallowExploreMaxFrontier distr
+
+let private runImportanceSamplesOnDistribution (config: ImportanceSamplingConfig<'T>) nsamples maxdepth sortBeforeSampling (selector: ImportanceSelector<'T> option) distr =
+    match selector with
+    | Some selector ->
+        sample_dist_importance_with_mass_budget
+            config.Subsample
+            nsamples
+            config.PreExploreDepth
+            config.PreExploreMinMass
+            maxdepth
+            selector
+            distr
+    | None ->
+        sample_dist_importance_prepared_with_mass_budget
+            config.Subsample
+            nsamples
+            config.PreExploreDepth
+            config.PreExploreMinMass
+            maxdepth
+            (random_prepared_frontier_selector sortBeforeSampling)
+            distr
+
+let private runImportanceSamples (config: ImportanceSamplingConfig<'T>) nsamples maxdepth sortBeforeSampling (selector: ImportanceSelector<'T> option) distr =
+    let effectiveConfig, inputDistribution =
+        if config.UsePreExplore then
+            config, shallowPreExplore config distr
+        else
+            { config with
+                PreExploreDepth = 0
+                PreExploreMinMass = 0.0
+                ShallowExploreMaxNodes = None
+                ShallowExploreMaxFrontier = None }, distr
+
+    runImportanceSamplesOnDistribution effectiveConfig nsamples maxdepth sortBeforeSampling selector inputDistribution
  
 
 type Model() =
@@ -1053,6 +1006,7 @@ type Model() =
             nsamples,
             maxdepth,
             ?subsample,
+            ?preExplore,
             ?sortBeforeSampling,
             ?pre_exploreDepth,
             ?shallowExploreMaxNodes,
@@ -1060,86 +1014,16 @@ type Model() =
             ?shallowExploreMaxFrontier,
             ?selector
         ) =
-        match selector with
-        | Some selector ->
-            sample_importanceAux
+        let config =
+            createImportanceSamplingConfig
+                (defaultArg preExplore true)
                 (defaultArg subsample id)
-                selector
                 (defaultArg pre_exploreDepth 3)
                 (defaultArg preExploreMinMass 0.0)
                 (Some (defaultArg shallowExploreMaxNodes 128))
                 (Some (defaultArg shallowExploreMaxFrontier 128))
-                maxdepth
-                nsamples
-                distr
-        | None ->
-            sample_importanceFastAux
-                (defaultArg subsample id)
-                (random_prepared_frontier_selector (defaultArg sortBeforeSampling false))
-                (defaultArg pre_exploreDepth 3)
-                (defaultArg preExploreMinMass 0.0)
-                (Some (defaultArg shallowExploreMaxNodes 128))
-                (Some (defaultArg shallowExploreMaxFrontier 128))
-                maxdepth
-                nsamples
-                distr 
 
-    /// <summary>
-    /// Fast stratified importance sampling over the root frontier using the
-    /// optimized sampler path.  Epsilon separates "heavy" and "light"
-    /// branches; at least one sample is allocated to each nonempty stratum.
-    /// </summary>
-    static member ImportanceSamplesStratified
-        (
-            distr,
-            nsamples,
-            maxdepth,
-            epsilon,
-            ?subsample,
-            ?sortBeforeSampling,
-            ?pre_exploreDepth,
-            ?shallowExploreMaxNodes,
-            ?preExploreMinMass,
-            ?shallowExploreMaxFrontier,
-            ?selector
-        ) =
-        match selector with
-        | Some selector ->
-            sample_dist_stratified_core
-                (fun sampleCount branches ->
-                    sample_dist_importance_with_mass_budget
-                        (defaultArg subsample id)
-                        sampleCount
-                        (defaultArg pre_exploreDepth 3)
-                        (defaultArg preExploreMinMass 0.0)
-                        maxdepth
-                        selector
-                        (shallow_explore_with_budget
-                            (defaultArg subsample id)
-                            (Some (defaultArg shallowExploreMaxNodes 128))
-                            (Some (defaultArg shallowExploreMaxFrontier 128))
-                            branches))
-                nsamples
-                epsilon
-                distr
-        | None ->
-            sample_dist_stratified_core
-                (fun sampleCount branches ->
-                    sample_dist_importance_prepared_with_mass_budget
-                        (defaultArg subsample id)
-                        sampleCount
-                        (defaultArg pre_exploreDepth 3)
-                        (defaultArg preExploreMinMass 0.0)
-                        maxdepth
-                        (random_prepared_frontier_selector (defaultArg sortBeforeSampling false))
-                        (shallow_explore_with_budget
-                            (defaultArg subsample id)
-                            (Some (defaultArg shallowExploreMaxNodes 128))
-                            (Some (defaultArg shallowExploreMaxFrontier 128))
-                            branches))
-                nsamples
-                epsilon
-                distr
+        runImportanceSamples config nsamples maxdepth (defaultArg sortBeforeSampling false) selector distr
 
     static member ExactInfer(distr, ?limit) = explore limit distr
 
@@ -1162,70 +1046,17 @@ type ModelFrom<'a, 'b when 'b: comparison>(distr: ProbabilitySpace<'b>, ?subsamp
 
     member __.model = distr
 
-    member __.ImportanceSample(nsamples, maxdepth, ?preExploreDepth, ?shallowExploreMaxNodes, ?preExploreMinMass, ?shallowExploreMaxFrontier, ?subsampler, ?selector, ?sortBeforeSampling) =
-        match selector with
-        | Some selector ->
-            sample_importanceAux
+    member __.ImportanceSample(nsamples, maxdepth, ?preExplore, ?preExploreDepth, ?shallowExploreMaxNodes, ?preExploreMinMass, ?shallowExploreMaxFrontier, ?subsampler, ?selector, ?sortBeforeSampling) =
+        let config =
+            createImportanceSamplingConfig
+                (defaultArg preExplore true)
                 (defaultArg subsampler subsample)
-                selector
                 (defaultArg preExploreDepth 3)
                 (defaultArg preExploreMinMass 0.0)
                 (Some (defaultArg shallowExploreMaxNodes 128))
                 (Some (defaultArg shallowExploreMaxFrontier 128))
-                maxdepth
-                nsamples
-                distr
-        | None ->
-            sample_importanceFastAux
-                (defaultArg subsampler subsample)
-                (random_prepared_frontier_selector (defaultArg sortBeforeSampling false))
-                (defaultArg preExploreDepth 3)
-                (defaultArg preExploreMinMass 0.0)
-                (Some (defaultArg shallowExploreMaxNodes 128))
-                (Some (defaultArg shallowExploreMaxFrontier 128))
-                maxdepth
-                nsamples
-                distr 
 
-    /// Fast stratified version using the optimized importance sampler.
-    member __.ImportanceSampleStratified(nsamples, maxdepth, epsilon, ?preExploreDepth, ?shallowExploreMaxNodes, ?preExploreMinMass, ?shallowExploreMaxFrontier, ?subsampler, ?selector, ?sortBeforeSampling) =
-        match selector with
-        | Some selector ->
-            sample_dist_stratified_core
-                (fun sampleCount branches ->
-                    sample_dist_importance_with_mass_budget
-                        (defaultArg subsampler subsample)
-                        sampleCount
-                        (defaultArg preExploreDepth 3)
-                        (defaultArg preExploreMinMass 0.0)
-                        maxdepth
-                        selector
-                        (shallow_explore_with_budget
-                            (defaultArg subsampler subsample)
-                            (Some (defaultArg shallowExploreMaxNodes 128))
-                            (Some (defaultArg shallowExploreMaxFrontier 128))
-                            branches))
-                nsamples
-                epsilon
-                distr
-        | None ->
-            sample_dist_stratified_core
-                (fun sampleCount branches ->
-                    sample_dist_importance_prepared_with_mass_budget
-                        (defaultArg subsampler subsample)
-                        sampleCount
-                        (defaultArg preExploreDepth 3)
-                        (defaultArg preExploreMinMass 0.0)
-                        maxdepth
-                        (random_prepared_frontier_selector (defaultArg sortBeforeSampling false))
-                        (shallow_explore_with_budget
-                            (defaultArg subsampler subsample)
-                            (Some (defaultArg shallowExploreMaxNodes 128))
-                            (Some (defaultArg shallowExploreMaxFrontier 128))
-                            branches))
-                nsamples
-                epsilon
-                distr
+        runImportanceSamples config nsamples maxdepth (defaultArg sortBeforeSampling false) selector distr
 
     member __.ExactInfer(?limit) = explore limit distr
 
