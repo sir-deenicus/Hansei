@@ -15,12 +15,10 @@ type Memo<'T> =
     | Memoized of (unit -> 'T) * ref<option<'T>>
     | Unmemoized of (unit -> 'T)
 
-let memo (f:unit -> 'T) : Memo<'T> =
-    Memoized (f, ref None)
+let memo (f:unit -> 'T) : Memo<'T> = Memoized (f, ref None)
 
 /// Creates a thunk that does not memoise (trades memory for recomputation).
-let nomemo (f:unit -> 'T) : Memo<'T> =
-    Unmemoized f
+let nomemo (f:unit -> 'T) : Memo<'T> = Unmemoized f
 
 let inline memoWith memoize (f:unit -> 'T) : Memo<'T> =
     if memoize then memo f else nomemo f
