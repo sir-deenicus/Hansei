@@ -8,6 +8,7 @@
 open System
 open System.Diagnostics
 open System.IO
+open System.Runtime.CompilerServices
 open Hansei.Core.List
 open Hansei.Core.List.Distributions
 open Hansei.Utils
@@ -20,6 +21,7 @@ type BeamConfig =
         BeamWidth: int
         MaxRounds: int
         EliteCount: int
+        DiversityBucketCount: int
         Seed: int
     }
 
@@ -198,6 +200,32 @@ let private appendCandidates parentWeight frontier (candidatePool: ResizeArray<C
                 | Done (value, weight) -> candidatePool.Add (CandidateValue value, parentWeight * weight)
                 | Branching (preparedFrontier, weight) -> candidatePool.Add (CandidateFrontier preparedFrontier, parentWeight * weight)
 
+let private combineHash seed value =
+    ((seed <<< 5) + seed) ^^^ value
+
+let private nodeBucketHash node =
+    match node with
+    | Value value -> combineHash 17 (Unchecked.hash value)
+    | ContinuedSubTree next -> combineHash 31 (RuntimeHelpers.GetHashCode(box next))
+
+let private candidateBucketKey bucketCount candidate =
+    if bucketCount <= 1 then
+        0
+    else
+        let rawHash =
+            match candidate with
+            | CandidateValue value -> combineHash 97 (Unchecked.hash value)
+            | CandidateFrontier frontier ->
+                frontier
+                |> List.filter (fun (_, weight) -> weight > 0.0)
+                |> List.sortByDescending snd
+                |> List.truncate 3
+                |> List.fold (fun hash (node, weight) ->
+                    let quantizedWeight = int (Math.Round(weight * 1024.0))
+                    combineHash (combineHash hash (nodeBucketHash node)) quantizedWeight) 53
+
+        abs rawHash % bucketCount
+
 let private systematicResample rngState beamWidth (items: (Candidate<'T> * float) list) =
     let totalWeight = items |> List.sumBy snd
 
@@ -241,7 +269,48 @@ let private systematicResample rngState beamWidth (items: (Candidate<'T> * float
         flushCurrent ()
         List.ofSeq resampled, nextRngState
 
-let private systematicCull rngState beamWidth eliteCount (items: (Candidate<'T> * float) list) =
+let private reserveBucketRepresentatives bucketCount slotCount (items: (Candidate<string> * float) list) =
+    if bucketCount <= 1 || slotCount <= 0 || List.isEmpty items then
+        [], items
+    else
+        let grouped =
+            items
+            |> List.groupBy (fun (candidate, _) -> candidateBucketKey bucketCount candidate)
+            |> List.map (fun (bucketKey, bucketItems) ->
+                let sortedItems = bucketItems |> List.sortByDescending snd
+                let totalWeight = sortedItems |> List.sumBy snd
+                bucketKey, totalWeight, sortedItems)
+            |> List.sortByDescending (fun (_, totalWeight, _) -> totalWeight)
+
+        let selectedBuckets = grouped |> List.truncate slotCount
+        let selectedKeys = selectedBuckets |> List.map (fun (bucketKey, _, _) -> bucketKey) |> Set.ofList
+
+        let reservedShares =
+            selectedBuckets
+            |> List.choose (fun (_, _, bucketItems) ->
+                match bucketItems with
+                | [] -> None
+                | (candidate, weight) :: _ ->
+                    Some
+                        {
+                            Candidate = candidate
+                            Occupancy = 1
+                            Weight = weight
+                        })
+
+        let remainingItems =
+            grouped
+            |> List.collect (fun (bucketKey, _, bucketItems) ->
+                if Set.contains bucketKey selectedKeys then
+                    match bucketItems with
+                    | [] -> []
+                    | _ :: rest -> rest
+                else
+                    bucketItems)
+
+        reservedShares, remainingItems
+
+let private systematicCull rngState beamWidth eliteCount diversityBucketCount (items: (Candidate<string> * float) list) =
     if beamWidth <= 0 || List.isEmpty items then
         [], rngState
     else
@@ -252,7 +321,9 @@ let private systematicCull rngState beamWidth eliteCount (items: (Candidate<'T> 
         let retainedEliteCount = min (max 0 eliteCount) maxEliteCount
 
         if retainedEliteCount <= 0 then
-            systematicResample rngState beamWidth items
+            let reservedBucketShares, bucketRemainder = reserveBucketRepresentatives diversityBucketCount beamWidth items
+            let resampledShares, nextRngState = systematicResample rngState (beamWidth - reservedBucketShares.Length) bucketRemainder
+            reservedBucketShares @ resampledShares, nextRngState
         else
             let sortedByWeight = items |> List.sortByDescending snd
             let eliteItems = sortedByWeight |> List.truncate retainedEliteCount
@@ -266,8 +337,9 @@ let private systematicCull rngState beamWidth eliteCount (items: (Candidate<'T> 
                         Weight = weight
                     })
 
-            let resampledShares, nextRngState = systematicResample rngState (beamWidth - retainedEliteCount) remainderItems
-            eliteShares @ resampledShares, nextRngState
+            let reservedBucketShares, bucketRemainder = reserveBucketRepresentatives diversityBucketCount (beamWidth - retainedEliteCount) remainderItems
+            let resampledShares, nextRngState = systematicResample rngState (beamWidth - retainedEliteCount - reservedBucketShares.Length) bucketRemainder
+            eliteShares @ reservedBucketShares @ resampledShares, nextRngState
 
 let private beamStateComplete state =
     state.Live.IsEmpty || state.Stats.Rounds >= state.Config.MaxRounds
@@ -279,6 +351,8 @@ let private initBeamState config distribution =
         invalidArg (nameof config.MaxRounds) "MaxRounds must be positive."
     elif config.EliteCount < 0 then
         invalidArg (nameof config.EliteCount) "EliteCount cannot be negative."
+    elif config.DiversityBucketCount < 0 then
+        invalidArg (nameof config.DiversityBucketCount) "DiversityBucketCount cannot be negative."
 
     {
         Config = config
@@ -311,7 +385,7 @@ let private advanceBeamRound state =
         let maxUniqueCandidateWidth = max state.Stats.MaxUniqueCandidateWidth candidateItems.Length
 
         let cullTimer = Stopwatch.StartNew()
-        let selected, nextRngState = systematicCull state.RngState state.Config.BeamWidth state.Config.EliteCount candidateItems
+        let selected, nextRngState = systematicCull state.RngState state.Config.BeamWidth state.Config.EliteCount state.Config.DiversityBucketCount candidateItems
         cullTimer.Stop()
         let maxSelectedRepresentativeWidth = max state.Stats.MaxSelectedRepresentativeWidth selected.Length
         let nextLive = ResizeArray<FrontierItem<string>>(selected.Length)
@@ -523,7 +597,7 @@ let private tests =
         Distribution = hardEvidencePosterior [ true; true; true; true; true; true; false; true ]
         Samples = 2500
         MaxDepth = 40
-        BeamConfig = { BeamWidth = 2500; MaxRounds = 128; EliteCount = 64; Seed = 17 }
+        BeamConfig = { BeamWidth = 2500; MaxRounds = 128; EliteCount = 64; DiversityBucketCount = 32; Seed = 17 }
         RawTopCount = Some 10
         Aggregations = [ "bias posterior", id ] }
 
@@ -532,7 +606,7 @@ let private tests =
         Distribution = olegInspiredPosterior
         Samples = 2500
         MaxDepth = 40
-        BeamConfig = { BeamWidth = 2500; MaxRounds = 128; EliteCount = 64; Seed = 17 }
+        BeamConfig = { BeamWidth = 2500; MaxRounds = 128; EliteCount = 64; DiversityBucketCount = 32; Seed = 17 }
         RawTopCount = Some 10
         Aggregations = [ "warmup posterior", id ] }
 
@@ -541,7 +615,7 @@ let private tests =
         Distribution = olegInspiredPosteriorFactored
         Samples = 2500
         MaxDepth = 40
-        BeamConfig = { BeamWidth = 2500; MaxRounds = 128; EliteCount = 64; Seed = 17 }
+        BeamConfig = { BeamWidth = 2500; MaxRounds = 128; EliteCount = 64; DiversityBucketCount = 32; Seed = 17 }
         RawTopCount = Some 10
         Aggregations = [ "warmup posterior", id ] }
 
@@ -550,7 +624,7 @@ let private tests =
         Distribution = hiddenMarkovPosterior [| true; true; true; false; true; true; false; true |]
         Samples = 2500
         MaxDepth = 64
-        BeamConfig = { BeamWidth = 2500; MaxRounds = 256; EliteCount = 64; Seed = 17 }
+        BeamConfig = { BeamWidth = 2500; MaxRounds = 256; EliteCount = 64; DiversityBucketCount = 32; Seed = 17 }
         RawTopCount = Some 10
         Aggregations = [ "final state", id ] } ]
 
@@ -634,18 +708,18 @@ let private printSequentialHmmPrefixStudy () =
         let exactDist = exact distribution
         let importanceDist = importance 2500 64 distribution
         let pathDist = path 2500 distribution
-        let beamDist, _ = quiet (fun () -> stochasticBeam { BeamWidth = 2500; MaxRounds = 256; EliteCount = 64; Seed = 17 + prefixLength } distribution)
+        let beamDist, _ = quiet (fun () -> stochasticBeam { BeamWidth = 2500; MaxRounds = 256; EliteCount = 64; DiversityBucketCount = 32; Seed = 17 + prefixLength } distribution)
 
         let importanceMs = benchmark 3 (fun () -> importance 2500 64 distribution)
         let pathMs = benchmark 3 (fun () -> path 2500 distribution)
-        let beamMs = benchmark 3 (fun () -> quiet (fun () -> stochasticBeam { BeamWidth = 2500; MaxRounds = 256; EliteCount = 64; Seed = 17 + prefixLength } distribution) |> ignore)
+        let beamMs = benchmark 3 (fun () -> quiet (fun () -> stochasticBeam { BeamWidth = 2500; MaxRounds = 256; EliteCount = 64; DiversityBucketCount = 32; Seed = 17 + prefixLength } distribution) |> ignore)
 
         printfn "%13d | %13.6f | %7.6f | %7.6f | %13.3f | %7.3f | %7.3f" prefixLength (l1Distance exactDist importanceDist) (l1Distance exactDist pathDist) (l1Distance exactDist beamDist) importanceMs pathMs beamMs
 
 let private printSequentialHmmIncrementalStudy () =
     let observations = [| true; true; true; false; true; true; false; true |]
     let distribution = hiddenMarkovPosterior observations
-    let config = { BeamWidth = 2500; MaxRounds = 256; EliteCount = 64; Seed = 17 }
+    let config = { BeamWidth = 2500; MaxRounds = 256; EliteCount = 64; DiversityBucketCount = 32; Seed = 17 }
     let checkpoints = [ 1; 2; 4; 8; 12; 17 ]
     printfn "\n=== Incremental Beam State Study ==="
     printfn "This resumes the same stochastic beam state across multiple checkpoints rather than restarting from scratch."

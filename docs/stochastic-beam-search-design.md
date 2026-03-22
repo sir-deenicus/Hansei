@@ -199,6 +199,8 @@ This needs a careful distinction.
 
 Hansei's reversible search semantics apply inside the probabilistic program representation itself: suspended continuations, memoized subtree forcing, and branching histories must not be polluted by mutable host-language state that is supposed to rewind under backtracking.
 
+That is the precise meaning of statelessness in this note. The issue is not ordinary host-language allocation by itself. The issue is whether a stateful object can escape into divergent model histories, survive a failed branch, and then be observed again after Hansei backtracks into a different history. If that happens, the inference driver has smuggled cross-history information through host-language mutation, which invalidates the semantics.
+
 The stochastic beam state is only safe if it remains external inference-driver state.
 
 That means the following are safe:
@@ -220,9 +222,13 @@ The current prototype is compatible with Hansei's reversibility in that restrict
 3. temporary mutation is only used in local driver buffers,
 4. no mutable beam state is captured by user continuations.
 
+In other words, the state machine is not part of the monad's branching state. It is only an external driver that repeatedly consumes already-produced `ProbabilitySpace` frontiers. Each `advanceBeamRound` call returns a new beam snapshot; it does not install mutable beam objects into continuations, subtree thunks, or model closures. That is why resumability here does not conflict with Hansei's backtracking semantics.
+
 One subtlety mattered for resumability: a resumable beam state must also be persistent-safe, not just externally scoped. The earlier state-machine refactor stored a mutable `Random` inside the beam state, which meant advancing one state also mutated the RNG seen by older snapshots. That was not safe for branching or independent resumption from an old checkpoint.
 
 The prototype now uses explicit immutable RNG state instead. That makes old and new beam states independent snapshots again, which is the right design if we want resumable advancement to compose cleanly with Hansei's backtracking model and with future driver branching.
+
+The same rule applies to later optimizations. Elite retention, bucket grouping, and candidate hashing are only safe because they are computed from the current external frontier, stored in ephemeral local buffers, and discarded before control returns. They do not create mutable stateful objects that survive inside the probabilistic program.
 
 ## Streaming Support
 
@@ -274,6 +280,7 @@ type StochasticBeamConfig<'T> =
         BeamWidth: int
         MaxRounds: int
         EliteCount: int
+        DiversityBucketCount: int
         Subsample: ProbabilitySpace<'T> -> ProbabilitySpace<'T>
         SubtreeMemoization: SubtreeMemoization
     }
@@ -311,6 +318,8 @@ Part 2 is better allocation across distinct hypothesis families.
 
 That is where bucketed culling, local lookahead scores, or other diversity-preserving allocation policies belong. Those changes are more structural because they decide not just how much mass to keep, but which qualitatively different regions of the frontier must remain represented.
 
+The prototype now starts this part too. After elite retention, it builds coarse inferred buckets from candidate structure, reserves one representative from the heaviest nonempty buckets, and only then resamples the remaining beam slots. The current bucketing heuristic is intentionally external and shallow: terminal candidates bucket by answer label, and live frontier candidates bucket by a coarse structural hash of their top visible branches. That is enough to preserve more family coverage without changing the monadic interface.
+
 ## Experimental Plan
 
 Phase 1:
@@ -330,7 +339,16 @@ Phase 2:
 
 After fixing occupancy preservation, accumulated-weight propagation, and the resumable-state RNG persistence issue, the current prototype is still accurate on the existing benchmark suite.
 
-An elite-retention variant is now also being prototyped as the first part of the accuracy work. On the sequential HMM case it improves accuracy substantially, but it also keeps many more distinct frontier representatives alive, so that case becomes heavier by design. Full benchmark-table refresh for the elite-retention variant is still pending.
+An elite-retention variant now covers part 1 of the accuracy work, and a bucketed-culling variant now covers part 2. On the sequential HMM case these variants improve accuracy substantially, but they also keep many more distinct frontier representatives alive, so the sequential case becomes heavier by design. The older table below is still useful as the occupancy-preserving baseline.
+
+Preliminary numbers for the newer variant with `EliteCount = 64` and `DiversityBucketCount = 32`:
+
+1. hard evidence: beam `L1 = 0.000000`,
+2. Oleg rare evidence: beam `L1 = 0.000000`,
+3. Oleg exact-local case: beam `L1 = 0.000000`,
+4. sequential HMM: beam `L1 = 0.000003`, mean beam `L1 = 0.000011`.
+
+The main cost shows up exactly where expected. On the sequential HMM run the compact live frontier grows from the earlier `unique-live=94` baseline to about `unique-live=216`, and internal cull time grows as bucket bookkeeping is added. That is not a statelessness bug; it is the direct cost of preserving more distinct frontier families.
 
 With `beamWidth = 2500`:
 
@@ -360,7 +378,7 @@ Timing is now part of the prototype output as well:
 3. Oleg exact-local case: beam about `0.786 ms/run`, importance about `0.168 ms/run`,
 4. sequential HMM: beam about `5.817 ms/run`, importance about `212.642 ms/run`, path about `103.712 ms/run`.
 
-The internal timing split still suggests that frontier advancement dominates cost more than culling does. On the HMM run, advancement is about `2.292 ms` and culling about `1.348 ms`.
+In the occupancy-preserving baseline, frontier advancement dominates cost more than culling does. In the newer elite-plus-bucket variant, culling can become a larger fraction of the sequential HMM cost because grouping and diversity reservation deliberately do more work to preserve distinct families.
 
 ## Sequential HMM Prefix Study
 
