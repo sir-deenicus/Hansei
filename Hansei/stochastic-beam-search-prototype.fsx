@@ -6,6 +6,7 @@
 #r @".\bin\Debug\net50\Hansei.dll"
 
 open System
+open System.Collections.Generic
 open System.Diagnostics
 open System.IO
 open System.Runtime.CompilerServices
@@ -22,6 +23,9 @@ type BeamConfig =
         MaxRounds: int
         EliteCount: int
         DiversityBucketCount: int
+        LookaheadDepth: int
+        LookaheadStrength: float
+        MinBeamWidth: int
         Seed: int
     }
 
@@ -53,6 +57,13 @@ type private Candidate<'T> =
     | CandidateValue of 'T
     | CandidateFrontier of ProbabilitySpace<'T>
 
+type private WeightedCandidate<'T> =
+    {
+        Candidate: Candidate<'T>
+        Weight: float
+        CullWeight: float
+    }
+
 type private CandidateShare<'T> =
     {
         Candidate: Candidate<'T>
@@ -76,9 +87,16 @@ type private BeamState =
     {
         Config: BeamConfig
         RngState: uint64
-        Live: FrontierItem<string> list
+        Live: FrontierItem<string>[]
         Answers: Map<string, float>
         Stats: BeamStats
+    }
+
+type private BeamWorkspace =
+    {
+        CandidatePool: ResizeArray<Candidate<string> * float>
+        NextLive: ResizeArray<FrontierItem<string>>
+        AnswerBuffer: Dictionary<string, float>
     }
 
 type private BeamSnapshot =
@@ -153,6 +171,31 @@ let private averageBy projection items =
 let private addAnswerWeight value weight answers =
     Map.change value (fun existing -> Some (weight + defaultArg existing 0.0)) answers
 
+let private addAnswerWeightInPlace value weight (answers: Dictionary<string, float>) =
+    match answers.TryGetValue value with
+    | true, existing -> answers.[value] <- existing + weight
+    | false, _ -> answers.[value] <- weight
+
+let private loadAnswerBuffer (source: Map<string, float>) (buffer: Dictionary<string, float>) =
+    buffer.Clear()
+
+    for KeyValue(label, weight) in source do
+        buffer.[label] <- weight
+
+let private answerBufferToMap (buffer: Dictionary<string, float>) =
+    buffer
+    |> Seq.fold (fun acc (KeyValue(label, weight)) -> Map.add label weight acc) Map.empty
+
+let private createBeamWorkspace beamWidth =
+    {
+        CandidatePool = ResizeArray<Candidate<string> * float>(max 16 (beamWidth * 2))
+        NextLive = ResizeArray<FrontierItem<string>>(max 16 beamWidth)
+        AnswerBuffer = Dictionary<string, float>()
+    }
+
+let private elapsedMilliseconds startTicks =
+    float (Stopwatch.GetTimestamp() - startTicks) * 1000.0 / float Stopwatch.Frequency
+
 let private emptyBeamStats beamWidth =
     {
         Rounds = 0
@@ -200,6 +243,56 @@ let private appendCandidates parentWeight frontier (candidatePool: ResizeArray<C
                 | Done (value, weight) -> candidatePool.Add (CandidateValue value, parentWeight * weight)
                 | Branching (preparedFrontier, weight) -> candidatePool.Add (CandidateFrontier preparedFrontier, parentWeight * weight)
 
+let rec private relativeLookaheadMass depth frontier =
+    let live = frontier |> List.filter (fun (_, weight) -> weight > 0.0)
+    let totalWeight = live |> List.sumBy snd
+
+    if totalWeight <= 0.0 then
+        0.0
+    elif depth <= 0 then
+        1.0
+    else
+        let reachableMass =
+            live
+            |> List.sumBy (fun (node, branchWeight) ->
+                match node with
+                | Value _ -> branchWeight
+                | ContinuedSubTree next ->
+                    match collapseForced branchWeight (force next) with
+                    | Dead -> 0.0
+                    | Done (_, weight) -> weight
+                    | Branching (nextFrontier, weight) ->
+                        if depth = 1 then weight else weight * relativeLookaheadMass (depth - 1) nextFrontier)
+
+        reachableMass / totalWeight
+
+let private candidateLookaheadScore depth candidate =
+    if depth <= 0 then
+        1.0
+    else
+        match candidate with
+        | CandidateValue _ -> 1.0
+        | CandidateFrontier frontier -> relativeLookaheadMass depth frontier
+
+let private clamp01 value = max 0.0 (min 1.0 value)
+
+let private applyLookaheadScoring config (items: (Candidate<string> * float) array) =
+    let strength = clamp01 config.LookaheadStrength
+
+    items
+    |> Array.map (fun (candidate, weight) ->
+        let score = candidateLookaheadScore config.LookaheadDepth candidate
+        let multiplier =
+            if config.LookaheadDepth <= 0 || strength <= 0.0 then 1.0
+            else max 1e-12 ((1.0 - strength) + strength * score)
+
+        {
+            Candidate = candidate
+            Weight = weight
+            CullWeight = weight * multiplier
+        })
+    |> Array.toList
+
 let private combineHash seed value =
     ((seed <<< 5) + seed) ^^^ value
 
@@ -226,36 +319,37 @@ let private candidateBucketKey bucketCount candidate =
 
         abs rawHash % bucketCount
 
-let private systematicResample rngState beamWidth (items: (Candidate<'T> * float) list) =
-    let totalWeight = items |> List.sumBy snd
+let private systematicResample rngState beamWidth (items: WeightedCandidate<'T> list) =
+    let totalCullWeight = items |> List.sumBy (fun item -> item.CullWeight)
 
-    if beamWidth <= 0 || totalWeight <= 0.0 then
+    if beamWidth <= 0 || totalCullWeight <= 0.0 then
         [], rngState
     else
-        let step = totalWeight / float beamWidth
+        let step = totalCullWeight / float beamWidth
         let nextRngState, offset = nextUniform rngState
         let mutable cursor = offset * step
-        let offspringWeight = totalWeight / float beamWidth
         let sorted = items |> List.toArray
         let resampled = ResizeArray<CandidateShare<'T>>()
-        let mutable cumulative = snd sorted.[0]
+        let mutable cumulative = sorted.[0].CullWeight
         let mutable index = 0
         let mutable currentIndex = -1
         let mutable currentOccupancy = 0
 
         let flushCurrent () =
             if currentIndex >= 0 && currentOccupancy > 0 then
+                let selectedItem = sorted.[currentIndex]
+                let correctedUnitWeight = step * selectedItem.Weight / selectedItem.CullWeight
                 resampled.Add
                     {
-                        Candidate = fst sorted.[currentIndex]
+                        Candidate = selectedItem.Candidate
                         Occupancy = currentOccupancy
-                        Weight = offspringWeight * float currentOccupancy
+                        Weight = correctedUnitWeight * float currentOccupancy
                     }
 
         for _ in 1 .. beamWidth do
             while cursor > cumulative && index + 1 < sorted.Length do
                 index <- index + 1
-                cumulative <- cumulative + snd sorted.[index]
+                cumulative <- cumulative + sorted.[index].CullWeight
 
             if index = currentIndex then
                 currentOccupancy <- currentOccupancy + 1
@@ -269,16 +363,16 @@ let private systematicResample rngState beamWidth (items: (Candidate<'T> * float
         flushCurrent ()
         List.ofSeq resampled, nextRngState
 
-let private reserveBucketRepresentatives bucketCount slotCount (items: (Candidate<string> * float) list) =
+let private reserveBucketRepresentatives bucketCount slotCount (items: WeightedCandidate<string> list) =
     if bucketCount <= 1 || slotCount <= 0 || List.isEmpty items then
         [], items
     else
         let grouped =
             items
-            |> List.groupBy (fun (candidate, _) -> candidateBucketKey bucketCount candidate)
+            |> List.groupBy (fun item -> candidateBucketKey bucketCount item.Candidate)
             |> List.map (fun (bucketKey, bucketItems) ->
-                let sortedItems = bucketItems |> List.sortByDescending snd
-                let totalWeight = sortedItems |> List.sumBy snd
+                let sortedItems = bucketItems |> List.sortByDescending (fun item -> item.CullWeight)
+                let totalWeight = sortedItems |> List.sumBy (fun item -> item.CullWeight)
                 bucketKey, totalWeight, sortedItems)
             |> List.sortByDescending (fun (_, totalWeight, _) -> totalWeight)
 
@@ -290,12 +384,12 @@ let private reserveBucketRepresentatives bucketCount slotCount (items: (Candidat
             |> List.choose (fun (_, _, bucketItems) ->
                 match bucketItems with
                 | [] -> None
-                | (candidate, weight) :: _ ->
+                | item :: _ ->
                     Some
                         {
-                            Candidate = candidate
+                            Candidate = item.Candidate
                             Occupancy = 1
-                            Weight = weight
+                            Weight = item.Weight
                         })
 
         let remainingItems =
@@ -310,7 +404,7 @@ let private reserveBucketRepresentatives bucketCount slotCount (items: (Candidat
 
         reservedShares, remainingItems
 
-let private systematicCull rngState beamWidth eliteCount diversityBucketCount (items: (Candidate<string> * float) list) =
+let private systematicCull rngState beamWidth eliteCount diversityBucketCount (items: WeightedCandidate<string> list) =
     if beamWidth <= 0 || List.isEmpty items then
         [], rngState
     else
@@ -325,16 +419,16 @@ let private systematicCull rngState beamWidth eliteCount diversityBucketCount (i
             let resampledShares, nextRngState = systematicResample rngState (beamWidth - reservedBucketShares.Length) bucketRemainder
             reservedBucketShares @ resampledShares, nextRngState
         else
-            let sortedByWeight = items |> List.sortByDescending snd
+            let sortedByWeight = items |> List.sortByDescending (fun item -> item.CullWeight)
             let eliteItems = sortedByWeight |> List.truncate retainedEliteCount
             let remainderItems = sortedByWeight |> List.skip retainedEliteCount
             let eliteShares =
                 eliteItems
-                |> List.map (fun (candidate, weight) ->
+                |> List.map (fun item ->
                     {
-                        Candidate = candidate
+                        Candidate = item.Candidate
                         Occupancy = 1
-                        Weight = weight
+                        Weight = item.Weight
                     })
 
             let reservedBucketShares, bucketRemainder = reserveBucketRepresentatives diversityBucketCount (beamWidth - retainedEliteCount) remainderItems
@@ -342,7 +436,17 @@ let private systematicCull rngState beamWidth eliteCount diversityBucketCount (i
             eliteShares @ reservedBucketShares @ resampledShares, nextRngState
 
 let private beamStateComplete state =
-    state.Live.IsEmpty || state.Stats.Rounds >= state.Config.MaxRounds
+    Array.isEmpty state.Live || state.Stats.Rounds >= state.Config.MaxRounds
+
+let private effectiveBeamWidth config candidateCount =
+    if config.MinBeamWidth <= 0 || config.MinBeamWidth >= config.BeamWidth then
+        config.BeamWidth
+    else
+        let clampedCandidateCount = max 0 candidateCount
+        let minWidth = min config.MinBeamWidth config.BeamWidth
+        let span = config.BeamWidth - minWidth
+        let diversityRatio = min 1.0 (float clampedCandidateCount / float config.BeamWidth)
+        minWidth + int (Math.Round(diversityRatio * float span))
 
 let private initBeamState config distribution =
     if config.BeamWidth <= 0 then
@@ -353,102 +457,151 @@ let private initBeamState config distribution =
         invalidArg (nameof config.EliteCount) "EliteCount cannot be negative."
     elif config.DiversityBucketCount < 0 then
         invalidArg (nameof config.DiversityBucketCount) "DiversityBucketCount cannot be negative."
+    elif config.LookaheadDepth < 0 then
+        invalidArg (nameof config.LookaheadDepth) "LookaheadDepth cannot be negative."
+    elif config.LookaheadStrength < 0.0 || config.LookaheadStrength > 1.0 then
+        invalidArg (nameof config.LookaheadStrength) "LookaheadStrength must be between 0.0 and 1.0."
+    elif config.MinBeamWidth < 0 then
+        invalidArg (nameof config.MinBeamWidth) "MinBeamWidth cannot be negative."
+    elif config.MinBeamWidth > config.BeamWidth then
+        invalidArg (nameof config.MinBeamWidth) "MinBeamWidth cannot exceed BeamWidth."
 
     {
         Config = config
         RngState = uint64 (max 1 config.Seed)
-        Live = [ { Frontier = distribution; Occupancy = config.BeamWidth; Weight = 1.0 } ]
+        Live = [| { Frontier = distribution; Occupancy = config.BeamWidth; Weight = 1.0 } |]
         Answers = Map.empty
         Stats = emptyBeamStats config.BeamWidth
     }
 
-let private advanceBeamRound state =
+let private advanceBeamRoundCore collectStats (workspace: BeamWorkspace) state =
     if beamStateComplete state then
         state
     else
-        let roundTimer = Stopwatch.StartNew()
-        let advanceTimer = Stopwatch.StartNew()
-        let candidatePool = ResizeArray<Candidate<string> * float>()
-        let mutable answers = state.Answers
+        let roundStart = if collectStats then Stopwatch.GetTimestamp() else 0L
+        let advanceStart = if collectStats then Stopwatch.GetTimestamp() else 0L
+        workspace.CandidatePool.Clear()
+        workspace.NextLive.Clear()
+        loadAnswerBuffer state.Answers workspace.AnswerBuffer
         let roundNumber = state.Stats.Rounds + 1
         let maxUniqueLiveWidth = max state.Stats.MaxUniqueLiveWidth state.Live.Length
-        let maxLiveOccupancy = max state.Stats.MaxLiveOccupancy (state.Live |> List.sumBy (fun item -> item.Occupancy))
+        let maxLiveOccupancy = max state.Stats.MaxLiveOccupancy (state.Live |> Array.sumBy (fun item -> item.Occupancy))
 
         for item in state.Live do
             match collapseForced item.Weight item.Frontier with
             | Dead -> ()
-            | Done (value, weight) -> answers <- addAnswerWeight value weight answers
-            | Branching (frontier, weight) -> appendCandidates weight frontier candidatePool
+            | Done (value, weight) -> addAnswerWeightInPlace value weight workspace.AnswerBuffer
+            | Branching (frontier, weight) -> appendCandidates weight frontier workspace.CandidatePool
 
-        advanceTimer.Stop()
-        let candidateItems = List.ofSeq candidatePool
+        let candidateItems = workspace.CandidatePool.ToArray()
+        let scoredCandidates = applyLookaheadScoring state.Config candidateItems
         let maxUniqueCandidateWidth = max state.Stats.MaxUniqueCandidateWidth candidateItems.Length
+        let roundBeamWidth = effectiveBeamWidth state.Config candidateItems.Length
 
-        let cullTimer = Stopwatch.StartNew()
-        let selected, nextRngState = systematicCull state.RngState state.Config.BeamWidth state.Config.EliteCount state.Config.DiversityBucketCount candidateItems
-        cullTimer.Stop()
+        let advanceMs = if collectStats then elapsedMilliseconds advanceStart else 0.0
+        let cullStart = if collectStats then Stopwatch.GetTimestamp() else 0L
+        let selected, nextRngState = systematicCull state.RngState roundBeamWidth state.Config.EliteCount state.Config.DiversityBucketCount scoredCandidates
+        let cullMs = if collectStats then elapsedMilliseconds cullStart else 0.0
         let maxSelectedRepresentativeWidth = max state.Stats.MaxSelectedRepresentativeWidth selected.Length
-        let nextLive = ResizeArray<FrontierItem<string>>(selected.Length)
 
         for selectedCandidate in selected do
             match selectedCandidate.Candidate with
-            | CandidateValue value -> answers <- addAnswerWeight value selectedCandidate.Weight answers
+            | CandidateValue value -> addAnswerWeightInPlace value selectedCandidate.Weight workspace.AnswerBuffer
             | CandidateFrontier frontier ->
-                nextLive.Add
+                workspace.NextLive.Add
                     {
                         Frontier = frontier
                         Occupancy = selectedCandidate.Occupancy
                         Weight = selectedCandidate.Weight
                     }
 
-        roundTimer.Stop()
+        let nextAnswers = answerBufferToMap workspace.AnswerBuffer
+        let nextLive = workspace.NextLive.ToArray()
+        let totalMs = if collectStats then elapsedMilliseconds roundStart else 0.0
 
         {
             state with
                 RngState = nextRngState
-                Live = List.ofSeq nextLive
-                Answers = answers
+                Live = nextLive
+                Answers = nextAnswers
                 Stats =
-                    {
-                        Rounds = roundNumber
-                        MaxUniqueLiveWidth = maxUniqueLiveWidth
-                        MaxLiveOccupancy = maxLiveOccupancy
-                        MaxUniqueCandidateWidth = maxUniqueCandidateWidth
-                        MaxSelectedRepresentativeWidth = maxSelectedRepresentativeWidth
-                        AdvanceMs = state.Stats.AdvanceMs + advanceTimer.Elapsed.TotalMilliseconds
-                        CullMs = state.Stats.CullMs + cullTimer.Elapsed.TotalMilliseconds
-                        TotalMs = state.Stats.TotalMs + roundTimer.Elapsed.TotalMilliseconds
-                    }
+                    if collectStats then
+                        {
+                            Rounds = roundNumber
+                            MaxUniqueLiveWidth = maxUniqueLiveWidth
+                            MaxLiveOccupancy = maxLiveOccupancy
+                            MaxUniqueCandidateWidth = maxUniqueCandidateWidth
+                            MaxSelectedRepresentativeWidth = maxSelectedRepresentativeWidth
+                            AdvanceMs = state.Stats.AdvanceMs + advanceMs
+                            CullMs = state.Stats.CullMs + cullMs
+                            TotalMs = state.Stats.TotalMs + totalMs
+                        }
+                    else
+                        { state.Stats with Rounds = roundNumber }
         }
 
+let private advanceBeamRound state =
+    let workspace = createBeamWorkspace state.Config.BeamWidth
+    advanceBeamRoundCore true workspace state
+
+let private advanceBeamRoundLean state =
+    let workspace = createBeamWorkspace state.Config.BeamWidth
+    advanceBeamRoundCore false workspace state
+
 let private advanceBeamRounds roundCount state =
+    let workspace = createBeamWorkspace state.Config.BeamWidth
     let rec loop remaining currentState =
         if remaining <= 0 || beamStateComplete currentState then
             currentState
         else
-            loop (remaining - 1) (advanceBeamRound currentState)
+            loop (remaining - 1) (advanceBeamRoundCore true workspace currentState)
+
+    loop roundCount state
+
+let private advanceBeamRoundsLean roundCount state =
+    let workspace = createBeamWorkspace state.Config.BeamWidth
+    let rec loop remaining currentState =
+        if remaining <= 0 || beamStateComplete currentState then
+            currentState
+        else
+            loop (remaining - 1) (advanceBeamRoundCore false workspace currentState)
 
     loop roundCount state
 
 let private runBeamToCompletion state =
+    let workspace = createBeamWorkspace state.Config.BeamWidth
     let rec loop currentState =
         if beamStateComplete currentState then
             currentState
         else
-            loop (advanceBeamRound currentState)
+            loop (advanceBeamRoundCore true workspace currentState)
 
     loop state
 
-let private snapshotBeamState state =
-    let answersWithImmediateDone, pendingUniqueLive, pendingLiveSlots, pendingMass =
-        ((state.Answers, 0, 0, 0.0), state.Live)
-        ||> List.fold (fun (answers, uniqueLive, liveSlots, pendingMass) item ->
-            match collapseForced item.Weight item.Frontier with
-            | Done (value, weight) -> addAnswerWeight value weight answers, uniqueLive, liveSlots, pendingMass
-            | Dead -> answers, uniqueLive, liveSlots, pendingMass
-            | Branching _ -> answers, uniqueLive + 1, liveSlots + item.Occupancy, pendingMass + item.Weight)
+let private runBeamToCompletionLean state =
+    let workspace = createBeamWorkspace state.Config.BeamWidth
+    let rec loop currentState =
+        if beamStateComplete currentState then
+            currentState
+        else
+            loop (advanceBeamRoundCore false workspace currentState)
 
-    let dist = normalizeMap answersWithImmediateDone
+    loop state
+
+let private snapshotBeamStateCore (workspace: BeamWorkspace) state =
+    loadAnswerBuffer state.Answers workspace.AnswerBuffer
+
+    let pendingUniqueLive, pendingLiveSlots, pendingMass =
+        ((0, 0, 0.0), state.Live)
+        ||> Array.fold (fun (uniqueLive, liveSlots, pendingMass) item ->
+            match collapseForced item.Weight item.Frontier with
+            | Done (value, weight) ->
+                addAnswerWeightInPlace value weight workspace.AnswerBuffer
+                uniqueLive, liveSlots, pendingMass
+            | Dead -> uniqueLive, liveSlots, pendingMass
+            | Branching _ -> uniqueLive + 1, liveSlots + item.Occupancy, pendingMass + item.Weight)
+
+    let dist = workspace.AnswerBuffer |> answerBufferToMap |> normalizeMap
 
     {
         Dist = dist
@@ -456,6 +609,10 @@ let private snapshotBeamState state =
         PendingLiveSlots = pendingLiveSlots
         PendingMass = pendingMass
     }
+
+let private snapshotBeamState state =
+    let workspace = createBeamWorkspace state.Config.BeamWidth
+    snapshotBeamStateCore workspace state
 
 let private stochasticBeam (config: BeamConfig) distribution =
     let finalState =
@@ -465,6 +622,27 @@ let private stochasticBeam (config: BeamConfig) distribution =
 
     let snapshot = snapshotBeamState finalState
     snapshot.Dist, finalState.Stats
+
+let private stochasticBeamLean (config: BeamConfig) distribution =
+    let finalState =
+        distribution
+        |> initBeamState config
+        |> runBeamToCompletionLean
+
+    let workspace = createBeamWorkspace config.BeamWidth
+    let snapshot = snapshotBeamStateCore workspace finalState
+    snapshot.Dist
+
+let private formatBeamConfig config =
+    sprintf
+        "beam=%d, min-beam=%d, rounds=%d, elites=%d, buckets=%d, lookahead-depth=%d, lookahead-strength=%.2f"
+        config.BeamWidth
+        config.MinBeamWidth
+        config.MaxRounds
+        config.EliteCount
+        config.DiversityBucketCount
+        config.LookaheadDepth
+        config.LookaheadStrength
 
 let private formatBeamStats stats =
     sprintf
@@ -478,6 +656,42 @@ let private formatBeamStats stats =
 let private printBeamDiagnostics stats =
         printfn "Beam space profile: unique-live=%d, live-slots=%d, unique-candidates=%d, selected-reps=%d" stats.MaxUniqueLiveWidth stats.MaxLiveOccupancy stats.MaxUniqueCandidateWidth stats.MaxSelectedRepresentativeWidth
         printfn "Beam timing profile (ms): advance=%.3f, cull=%.3f, total=%.3f" stats.AdvanceMs stats.CullMs stats.TotalMs
+
+let private baselineBeamConfig beamWidth maxRounds seed =
+    {
+        BeamWidth = beamWidth
+        MaxRounds = maxRounds
+        EliteCount = 0
+        DiversityBucketCount = 0
+        LookaheadDepth = 0
+        LookaheadStrength = 0.0
+        MinBeamWidth = beamWidth
+        Seed = seed
+    }
+
+let private enhancedBeamConfig beamWidth maxRounds seed =
+    {
+        BeamWidth = beamWidth
+        MaxRounds = maxRounds
+        EliteCount = 64
+        DiversityBucketCount = 32
+        LookaheadDepth = 1
+        LookaheadStrength = 0.5
+        MinBeamWidth = max 256 (beamWidth / 4)
+        Seed = seed
+    }
+
+let private withEliteRetention eliteCount config =
+    { config with EliteCount = eliteCount }
+
+let private withBucketedCulling bucketCount config =
+    { config with DiversityBucketCount = bucketCount }
+
+let private withLookahead depth strength config =
+    { config with LookaheadDepth = depth; LookaheadStrength = strength }
+
+let private withAdaptiveWidth minBeamWidth config =
+    { config with MinBeamWidth = minBeamWidth }
 
 let private printBeamStateSnapshot title state =
     let snapshot = snapshotBeamState state
@@ -597,7 +811,7 @@ let private tests =
         Distribution = hardEvidencePosterior [ true; true; true; true; true; true; false; true ]
         Samples = 2500
         MaxDepth = 40
-        BeamConfig = { BeamWidth = 2500; MaxRounds = 128; EliteCount = 64; DiversityBucketCount = 32; Seed = 17 }
+        BeamConfig = enhancedBeamConfig 2500 128 17
         RawTopCount = Some 10
         Aggregations = [ "bias posterior", id ] }
 
@@ -606,7 +820,7 @@ let private tests =
         Distribution = olegInspiredPosterior
         Samples = 2500
         MaxDepth = 40
-        BeamConfig = { BeamWidth = 2500; MaxRounds = 128; EliteCount = 64; DiversityBucketCount = 32; Seed = 17 }
+        BeamConfig = enhancedBeamConfig 2500 128 17
         RawTopCount = Some 10
         Aggregations = [ "warmup posterior", id ] }
 
@@ -615,7 +829,7 @@ let private tests =
         Distribution = olegInspiredPosteriorFactored
         Samples = 2500
         MaxDepth = 40
-        BeamConfig = { BeamWidth = 2500; MaxRounds = 128; EliteCount = 64; DiversityBucketCount = 32; Seed = 17 }
+        BeamConfig = enhancedBeamConfig 2500 128 17
         RawTopCount = Some 10
         Aggregations = [ "warmup posterior", id ] }
 
@@ -624,7 +838,7 @@ let private tests =
         Distribution = hiddenMarkovPosterior [| true; true; true; false; true; true; false; true |]
         Samples = 2500
         MaxDepth = 64
-        BeamConfig = { BeamWidth = 2500; MaxRounds = 256; EliteCount = 64; DiversityBucketCount = 32; Seed = 17 }
+        BeamConfig = enhancedBeamConfig 2500 256 17
         RawTopCount = Some 10
         Aggregations = [ "final state", id ] } ]
 
@@ -641,6 +855,7 @@ let private printRunSummary testCase =
     printfn "\n=== %s ===" testCase.Name
     printfn "%s" testCase.Why
     printfn "Samples / beam width: %d" testCase.Samples
+    printfn "Beam config: %s" (formatBeamConfig testCase.BeamConfig)
     printBeamDiagnostics beamStats
 
     match testCase.RawTopCount with
@@ -673,7 +888,7 @@ let private printStability testCase =
 
     let beamErrors =
         [ for runIndex in 0 .. 11 ->
-            let estimate, _ = quiet (fun () -> stochasticBeam { testCase.BeamConfig with Seed = testCase.BeamConfig.Seed + runIndex } testCase.Distribution)
+            let estimate = quiet (fun () -> stochasticBeamLean { testCase.BeamConfig with Seed = testCase.BeamConfig.Seed + runIndex } testCase.Distribution)
             l1Distance exactDist estimate ]
 
     printfn "Mean L1 importance over 12 runs = %.6f" (List.average importanceErrors)
@@ -705,21 +920,22 @@ let private printSequentialHmmPrefixStudy () =
     for prefixLength in 1 .. observations.Length do
         let prefix = observations.[0 .. prefixLength - 1]
         let distribution = hiddenMarkovPosterior prefix
+        let config = enhancedBeamConfig 2500 256 (17 + prefixLength)
         let exactDist = exact distribution
         let importanceDist = importance 2500 64 distribution
         let pathDist = path 2500 distribution
-        let beamDist, _ = quiet (fun () -> stochasticBeam { BeamWidth = 2500; MaxRounds = 256; EliteCount = 64; DiversityBucketCount = 32; Seed = 17 + prefixLength } distribution)
+        let beamDist = quiet (fun () -> stochasticBeamLean config distribution)
 
         let importanceMs = benchmark 3 (fun () -> importance 2500 64 distribution)
         let pathMs = benchmark 3 (fun () -> path 2500 distribution)
-        let beamMs = benchmark 3 (fun () -> quiet (fun () -> stochasticBeam { BeamWidth = 2500; MaxRounds = 256; EliteCount = 64; DiversityBucketCount = 32; Seed = 17 + prefixLength } distribution) |> ignore)
+        let beamMs = benchmark 3 (fun () -> quiet (fun () -> stochasticBeamLean config distribution) |> ignore)
 
         printfn "%13d | %13.6f | %7.6f | %7.6f | %13.3f | %7.3f | %7.3f" prefixLength (l1Distance exactDist importanceDist) (l1Distance exactDist pathDist) (l1Distance exactDist beamDist) importanceMs pathMs beamMs
 
 let private printSequentialHmmIncrementalStudy () =
     let observations = [| true; true; true; false; true; true; false; true |]
     let distribution = hiddenMarkovPosterior observations
-    let config = { BeamWidth = 2500; MaxRounds = 256; EliteCount = 64; DiversityBucketCount = 32; Seed = 17 }
+    let config = enhancedBeamConfig 2500 256 17
     let checkpoints = [ 1; 2; 4; 8; 12; 17 ]
     printfn "\n=== Incremental Beam State Study ==="
     printfn "This resumes the same stochastic beam state across multiple checkpoints rather than restarting from scratch."
@@ -738,17 +954,47 @@ let private printSequentialHmmIncrementalStudy () =
             let mutable priorCheckpoint = 0
 
             for checkpoint in checkpoints do
-                resumedState <- advanceBeamRounds (checkpoint - priorCheckpoint) resumedState
+                resumedState <- advanceBeamRoundsLean (checkpoint - priorCheckpoint) resumedState
                 priorCheckpoint <- checkpoint
 
             snapshotBeamState resumedState |> ignore)
 
     let oneShotMs =
         benchmark 5 (fun () ->
-            quiet (fun () -> stochasticBeam config distribution) |> ignore)
+            quiet (fun () -> stochasticBeamLean config distribution) |> ignore)
 
     printfn "Incremental resume ms/run over 5 runs = %.3f" resumedMs
     printfn "One-shot beam ms/run over 5 runs      = %.3f" oneShotMs
+
+let private printSequentialHmmAblationStudy () =
+    let observations = [| true; true; true; false; true; true; false; true |]
+    let distribution = hiddenMarkovPosterior observations
+    let exactDist = exact distribution
+    let baseline = baselineBeamConfig 2500 256 17
+    let variants =
+        [
+            ("baseline", baseline)
+            ("elite-only", baseline |> withEliteRetention 64)
+            ("bucket-only", baseline |> withBucketedCulling 32)
+            ("lookahead-only", baseline |> withLookahead 1 0.5)
+            ("adaptive-only", baseline |> withAdaptiveWidth 625)
+            ("all-enabled", enhancedBeamConfig 2500 256 17)
+        ]
+
+    printfn "\n=== Sequential HMM Ablation Study ==="
+    printfn "One focused case: each row toggles exactly one implemented strategy on top of the same baseline, plus the fully enabled configuration."
+    printfn "Columns: variant | mean L1 beam | ms beam | unique-live | selected-reps | config"
+
+    for label, config in variants do
+        let meanL1 =
+            [ for runIndex in 0 .. 4 ->
+                let estimate = quiet (fun () -> stochasticBeamLean { config with Seed = config.Seed + runIndex } distribution)
+                l1Distance exactDist estimate ]
+            |> List.average
+
+        let beamMs = benchmark 5 (fun () -> quiet (fun () -> stochasticBeamLean config distribution) |> ignore)
+        let _, stats = quiet (fun () -> stochasticBeam config distribution)
+        printfn "%13s | %13.6f | %7.3f | %11d | %13d | %s" label meanL1 beamMs stats.MaxUniqueLiveWidth stats.MaxSelectedRepresentativeWidth (formatBeamConfig config)
 
 for testCase in tests do
     printRunSummary testCase
@@ -757,3 +1003,4 @@ for testCase in tests do
 
 printSequentialHmmPrefixStudy ()
 printSequentialHmmIncrementalStudy ()
+printSequentialHmmAblationStudy ()

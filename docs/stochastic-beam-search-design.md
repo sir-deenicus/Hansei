@@ -290,6 +290,14 @@ type Model with
 ```
 ```
 
+The slower accuracy-preserving paths are optional by configuration:
+
+1. `EliteCount = 0` disables part 1 and leaves plain stochastic culling,
+2. `DiversityBucketCount <= 1` disables part 2 and leaves no bucket reservation,
+3. `LookaheadDepth = 0` or `LookaheadStrength = 0.0` disables local lookahead scoring,
+4. `MinBeamWidth >= BeamWidth` disables adaptive beam width,
+5. nonzero or nontrivial values turn those features on only when wanted.
+
 Possible later additions:
 
 1. optional bucket function for non-root stratified allocation,
@@ -320,6 +328,43 @@ That is where bucketed culling, local lookahead scores, or other diversity-prese
 
 The prototype now starts this part too. After elite retention, it builds coarse inferred buckets from candidate structure, reserves one representative from the heaviest nonempty buckets, and only then resamples the remaining beam slots. The current bucketing heuristic is intentionally external and shallow: terminal candidates bucket by answer label, and live frontier candidates bucket by a coarse structural hash of their top visible branches. That is enough to preserve more family coverage without changing the monadic interface.
 
+This current bucket key is not another lookahead pass. It uses only information already visible in the current candidate frontier after one normal expansion round. A future refinement could replace that coarse structural hash with a true shallow lookahead score or a more semantic bucket key, but that later idea is not implemented yet.
+
+The prototype now also includes the cheap local lookahead score from the earlier improvement list. This is a separate optional heuristic from bucketed culling. It assigns each candidate a shallow survivability score from a bounded external inspection of already-reachable frontier structure, then uses that score only to bias culling priorities. It does not alter the model interface, and it does not insert state into the monad.
+
+The prototype also now includes optional adaptive beam width. `BeamWidth` is the configured maximum width, `MinBeamWidth` is the configured minimum width, and each round chooses an effective width between them based on current candidate-set size. That lets the driver shrink on narrow frontiers and expand back to the cap on wider ones.
+
+## Improvement Mapping
+
+The earlier improvement list was:
+
+1. bucketed culling for non-root stratified allocation,
+2. a cheap local lookahead score before culling,
+3. frontier merging by semantic key where possible,
+4. adaptive beam width.
+
+What is completed now:
+
+1. bucketed culling is implemented,
+2. cheap local lookahead scoring is implemented,
+3. adaptive beam width is implemented,
+4. deterministic elite retention is also implemented even though it was not one of the original four items.
+
+What is not completed yet:
+
+1. no active item remains from that original four-item list except a much harder domain-specific version of semantic merging, and the first generic shallow merge heuristic already failed.
+
+That harder remaining idea means the following. If two live frontier representatives are syntactically different suspended trees but are known to correspond to the same future inference state for the question we care about, then the driver could merge them into one representative and add their weights instead of carrying them separately. In an HMM, for example, two frontier states that differ only in irrelevant administrative history but imply the same hidden-state posterior and same future observation model could in principle be merged. This is potentially powerful, but it needs a genuinely semantics-respecting key.
+
+We tested one shallow future-signature heuristic for this and removed it again. On the sequential HMM ablation it collapsed the live frontier aggressively and ran faster, but mean `L1` jumped to about `0.208`, so it was not worth keeping as a generic optimization. The lesson is that a shallow structural or short-horizon behavioral signature is not strong enough for safe semantic merging.
+
+So the two worksets that were actually implemented in the prototype are:
+
+1. workset 1: variance reduction inside the current culling semantics via elite retention,
+2. workset 2: diversity preservation and smarter allocation via bucketed culling, optional shallow lookahead scoring, and optional adaptive beam width.
+
+Those worksets were a reorganization of the earlier list, not a claim that the remaining semantic-merging item was already done.
+
 ## Experimental Plan
 
 Phase 1:
@@ -339,16 +384,93 @@ Phase 2:
 
 After fixing occupancy preservation, accumulated-weight propagation, and the resumable-state RNG persistence issue, the current prototype is still accurate on the existing benchmark suite.
 
-An elite-retention variant now covers part 1 of the accuracy work, and a bucketed-culling variant now covers part 2. On the sequential HMM case these variants improve accuracy substantially, but they also keep many more distinct frontier representatives alive, so the sequential case becomes heavier by design. The older table below is still useful as the occupancy-preserving baseline.
+An elite-retention variant now covers part 1 of the accuracy work, and a bucketed-culling plus lookahead-scoring plus adaptive-width variant now covers part 2. On the sequential HMM case these variants improve accuracy substantially, but they also keep many more distinct frontier representatives alive and do more driver-side selection work, so the sequential case remains heavier than the original occupancy-preserving baseline.
 
-Preliminary numbers for the newer variant with `EliteCount = 64` and `DiversityBucketCount = 32`:
+Preliminary numbers for the newer variant with `EliteCount = 64`, `DiversityBucketCount = 32`, `LookaheadDepth = 1`, `LookaheadStrength = 0.5`, and `MinBeamWidth = 625`:
 
 1. hard evidence: beam `L1 = 0.000000`,
 2. Oleg rare evidence: beam `L1 = 0.000000`,
 3. Oleg exact-local case: beam `L1 = 0.000000`,
-4. sequential HMM: beam `L1 = 0.000003`, mean beam `L1 = 0.000011`.
+4. sequential HMM: beam `L1 = 0.000031`, mean beam `L1 = 0.000026`.
 
-The main cost shows up exactly where expected. On the sequential HMM run the compact live frontier grows from the earlier `unique-live=94` baseline to about `unique-live=216`, and internal cull time grows as bucket bookkeeping is added. That is not a statelessness bug; it is the direct cost of preserving more distinct frontier families.
+The main cost still shows up exactly where expected. On the sequential HMM run the compact live frontier stays far above the earlier `unique-live=94` baseline at about `unique-live=198`, and internal cull time remains materially larger as bucket bookkeeping and lookahead-biased scoring are added. Adaptive width recovers some space by reducing the selected live set to about `selected-reps=257` instead of the earlier bucketed value around `333`, but this is still a deliberate driver-side cost rather than any statelessness bug.
+
+## Focused Ablation Study
+
+The prototype now also includes one focused ablation on the sequential HMM case. Each row toggles one implemented strategy on top of the same plain stochastic-beam baseline, plus the fully enabled configuration.
+
+Mean L1 over 5 seeds, with one representative runtime and space profile:
+
+1. baseline: mean `L1 = 0.021463`, about `1.986 ms/run`, `unique-live=94`, `selected-reps=126`,
+2. elite-only: mean `L1 = 0.000020`, about `5.432 ms/run`, `unique-live=209`, `selected-reps=331`,
+3. bucket-only: mean `L1 = 0.000357`, about `10.330 ms/run`, `unique-live=156`, `selected-reps=156`,
+4. lookahead-only: mean `L1 = 0.015017`, about `1.936 ms/run`, `unique-live=89`, `selected-reps=121`,
+5. adaptive-only: mean `L1 = 0.007407`, about `0.718 ms/run`, `unique-live=49`, `selected-reps=66`,
+6. all-enabled: mean `L1 = 0.000014`, about `5.247 ms/run`, `unique-live=205`, `selected-reps=258`.
+
+The main takeaway is straightforward:
+
+1. elite retention is the biggest single accuracy win,
+2. bucketed culling also helps strongly, but is comparatively expensive in this first heuristic form,
+3. shallow lookahead alone helps modestly on this case,
+4. adaptive width alone is mainly a speed and space control, though it also improves accuracy here by avoiding over-allocation to narrow low-diversity rounds,
+5. the combined configuration keeps most of the accuracy gain while recovering some live-width cost relative to elite-only and bucket-only.
+
+Separate note on the rejected merge experiment:
+
+1. the removed shallow merge heuristic reached mean `L1` around `0.208` on the same HMM case,
+2. it got faster only because it incorrectly collapsed the frontier to about `unique-live=2`,
+3. so it is best treated as a rejected experiment, not part of the active optimizer set.
+
+## Optimization Plan
+
+The next optimization pass is split into two coherent parts.
+
+### Part 1: Hot-Path Dataflow
+
+Goal: remove avoidable allocation, pointer chasing, and hot-path persistent-map work without changing the beam algorithm itself.
+
+Work items:
+
+1. move more of the live-state path to array or buffer-backed flow,
+2. replace repeated `Map.change` in round execution with transient mutable dictionaries,
+3. reuse candidate and next-live buffers across rounds through an external reusable workspace,
+4. split lean execution from instrumented benchmark execution so ordinary runs do not pay stats overhead by default.
+
+Safety constraints for part 1:
+
+1. mutable dictionaries used for answers are transient round-local or snapshot-local scratch only,
+2. reusable buffers are not stored inside `BeamState`,
+3. reusable buffers live in an external driver workspace and are cleared before reuse,
+4. no reusable mutable object may escape into `ProbabilitySpace`, subtree thunks, or user continuations,
+5. resumable `BeamState` snapshots remain persistent-safe values even when the driver chooses to reuse scratch buffers across rounds.
+
+That means buffer reuse is safe here only in the same restricted sense as the rest of the external beam driver: the workspace is a host-side execution scratchpad, not part of the monad's branching state.
+
+Current implementation status:
+
+1. part 1 is now implemented in the prototype,
+2. `BeamState` keeps persistent-safe snapshot data only,
+3. transient answer dictionaries are round-local or snapshot-local scratch,
+4. reusable candidate and next-live buffers live in an external workspace object, not inside `BeamState`,
+5. a lean execution path now avoids benchmark-style stats collection on non-reporting runs.
+
+### Part 2: Round-Structure And Complexity
+
+Goal: reduce repeated whole-pool work and improve culling pipeline efficiency after part 1 has removed the obvious allocation and instrumentation overheads.
+
+Work items:
+
+1. fuse more of the culling pipeline to avoid repeated sorting and full-pool passes,
+2. compute round summaries once and reuse them for adaptive width and culling decisions,
+3. revisit shallow lookahead cost so repeated local inspections are amortized better,
+4. only then consider deeper layout changes if measurements still justify them.
+
+Ordering rule:
+
+1. complete part 1 first,
+2. remeasure on the current benchmark suite,
+3. only then start part 2.
 
 With `beamWidth = 2500`:
 
