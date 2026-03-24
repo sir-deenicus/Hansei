@@ -64,6 +64,14 @@ type private WeightedCandidate<'T> =
         CullWeight: float
     }
 
+type private CandidateRoundInfo<'T> =
+    {
+        Candidate: Candidate<'T>
+        Weight: float
+        CullWeight: float
+        BucketKey: int
+    }
+
 type private CandidateShare<'T> =
     {
         Candidate: Candidate<'T>
@@ -97,6 +105,21 @@ type private BeamWorkspace =
         CandidatePool: ResizeArray<Candidate<string> * float>
         NextLive: ResizeArray<FrontierItem<string>>
         AnswerBuffer: Dictionary<string, float>
+        CullRemainder: ResizeArray<CandidateRoundInfo<string>>
+        SelectedShares: ResizeArray<CandidateShare<string>>
+        BucketTotals: Dictionary<int, float>
+        SelectedBuckets: HashSet<int>
+        ConsumedBuckets: HashSet<int>
+        BucketWeights: ResizeArray<struct (int * float)>
+        LookaheadCache: Dictionary<struct (int * int), float>
+    }
+
+type private CandidateRoundSummary<'T> =
+    {
+        Candidates: CandidateRoundInfo<'T>[]
+        CandidateCount: int
+        RoundBeamWidth: int
+        TotalCullWeight: float
     }
 
 type private BeamSnapshot =
@@ -159,6 +182,7 @@ let private importanceNoPre samples maxDepth distribution = quiet (fun () -> Mod
 let private path samples distribution = quiet (fun () -> Model.PathSample(distribution, samples)) |> normalizedValues
 
 let private benchmark repeats action =
+    action () |> ignore
     let timer = Stopwatch.StartNew()
     for _ in 1 .. repeats do
         action () |> ignore
@@ -191,6 +215,13 @@ let private createBeamWorkspace beamWidth =
         CandidatePool = ResizeArray<Candidate<string> * float>(max 16 (beamWidth * 2))
         NextLive = ResizeArray<FrontierItem<string>>(max 16 beamWidth)
         AnswerBuffer = Dictionary<string, float>()
+        CullRemainder = ResizeArray<CandidateRoundInfo<string>>(max 16 beamWidth)
+        SelectedShares = ResizeArray<CandidateShare<string>>(max 16 beamWidth)
+        BucketTotals = Dictionary<int, float>()
+        SelectedBuckets = HashSet<int>()
+        ConsumedBuckets = HashSet<int>()
+        BucketWeights = ResizeArray<struct (int * float)>()
+        LookaheadCache = Dictionary<struct (int * int), float>()
     }
 
 let private elapsedMilliseconds startTicks =
@@ -243,7 +274,106 @@ let private appendCandidates parentWeight frontier (candidatePool: ResizeArray<C
                 | Done (value, weight) -> candidatePool.Add (CandidateValue value, parentWeight * weight)
                 | Branching (preparedFrontier, weight) -> candidatePool.Add (CandidateFrontier preparedFrontier, parentWeight * weight)
 
-let rec private relativeLookaheadMass depth frontier =
+let private combineHash seed value =
+    ((seed <<< 5) + seed) ^^^ value
+
+let private nodeBucketHash node =
+    match node with
+    | Value value -> combineHash 17 (Unchecked.hash value)
+    | ContinuedSubTree next -> combineHash 31 (RuntimeHelpers.GetHashCode(box next))
+
+let private frontierBucketHash frontier =
+    let mutable first = Unchecked.defaultof<struct (float * int * int)>
+    let mutable second = Unchecked.defaultof<struct (float * int * int)>
+    let mutable third = Unchecked.defaultof<struct (float * int * int)>
+    let mutable hasFirst = false
+    let mutable hasSecond = false
+    let mutable hasThird = false
+
+    let inline insert weight nodeHash quantizedWeight =
+        let firstWeight =
+            if hasFirst then
+                let struct (storedWeight, _, _) = first
+                storedWeight
+            else
+                Double.NegativeInfinity
+
+        let secondWeight =
+            if hasSecond then
+                let struct (storedWeight, _, _) = second
+                storedWeight
+            else
+                Double.NegativeInfinity
+
+        let thirdWeight =
+            if hasThird then
+                let struct (storedWeight, _, _) = third
+                storedWeight
+            else
+                Double.NegativeInfinity
+
+        if weight > firstWeight then
+            if hasSecond then
+                third <- second
+                hasThird <- true
+
+            if hasFirst then
+                second <- first
+                hasSecond <- true
+
+            first <- struct (weight, nodeHash, quantizedWeight)
+            hasFirst <- true
+        elif weight > secondWeight then
+            if hasSecond then
+                third <- second
+                hasThird <- true
+
+            second <- struct (weight, nodeHash, quantizedWeight)
+            hasSecond <- true
+        elif weight > thirdWeight then
+            third <- struct (weight, nodeHash, quantizedWeight)
+            hasThird <- true
+
+    for node, weight in frontier do
+        if weight > 0.0 then
+            insert weight (nodeBucketHash node) (int (Math.Round(weight * 1024.0)))
+
+    let mutable hash = 53
+
+    if hasFirst then
+        let struct (_, nodeHash, quantizedWeight) = first
+        hash <- combineHash (combineHash hash nodeHash) quantizedWeight
+
+    if hasSecond then
+        let struct (_, nodeHash, quantizedWeight) = second
+        hash <- combineHash (combineHash hash nodeHash) quantizedWeight
+
+    if hasThird then
+        let struct (_, nodeHash, quantizedWeight) = third
+        hash <- combineHash (combineHash hash nodeHash) quantizedWeight
+
+    hash
+
+let private lookaheadCacheKey depth next =
+    struct (depth, RuntimeHelpers.GetHashCode(box next))
+
+let rec private subtreeLookaheadMass depth next (cache: Dictionary<struct (int * int), float>) =
+    let key = lookaheadCacheKey depth next
+
+    match cache.TryGetValue key with
+    | true, cached -> cached
+    | false, _ ->
+        let mass =
+            match collapseForced 1.0 (force next) with
+            | Dead -> 0.0
+            | Done (_, weight) -> weight
+            | Branching (nextFrontier, weight) ->
+                if depth <= 1 then weight else weight * relativeLookaheadMass (depth - 1) nextFrontier cache
+
+        cache.[key] <- mass
+        mass
+
+and private relativeLookaheadMass depth frontier (cache: Dictionary<struct (int * int), float>) =
     let live = frontier |> List.filter (fun (_, weight) -> weight > 0.0)
     let totalWeight = live |> List.sumBy snd
 
@@ -257,49 +387,19 @@ let rec private relativeLookaheadMass depth frontier =
             |> List.sumBy (fun (node, branchWeight) ->
                 match node with
                 | Value _ -> branchWeight
-                | ContinuedSubTree next ->
-                    match collapseForced branchWeight (force next) with
-                    | Dead -> 0.0
-                    | Done (_, weight) -> weight
-                    | Branching (nextFrontier, weight) ->
-                        if depth = 1 then weight else weight * relativeLookaheadMass (depth - 1) nextFrontier)
+                | ContinuedSubTree next -> branchWeight * subtreeLookaheadMass depth next cache)
 
         reachableMass / totalWeight
 
-let private candidateLookaheadScore depth candidate =
+let private candidateLookaheadScore depth candidate (cache: Dictionary<struct (int * int), float>) =
     if depth <= 0 then
         1.0
     else
         match candidate with
         | CandidateValue _ -> 1.0
-        | CandidateFrontier frontier -> relativeLookaheadMass depth frontier
+        | CandidateFrontier frontier -> relativeLookaheadMass depth frontier cache
 
 let private clamp01 value = max 0.0 (min 1.0 value)
-
-let private applyLookaheadScoring config (items: (Candidate<string> * float) array) =
-    let strength = clamp01 config.LookaheadStrength
-
-    items
-    |> Array.map (fun (candidate, weight) ->
-        let score = candidateLookaheadScore config.LookaheadDepth candidate
-        let multiplier =
-            if config.LookaheadDepth <= 0 || strength <= 0.0 then 1.0
-            else max 1e-12 ((1.0 - strength) + strength * score)
-
-        {
-            Candidate = candidate
-            Weight = weight
-            CullWeight = weight * multiplier
-        })
-    |> Array.toList
-
-let private combineHash seed value =
-    ((seed <<< 5) + seed) ^^^ value
-
-let private nodeBucketHash node =
-    match node with
-    | Value value -> combineHash 17 (Unchecked.hash value)
-    | ContinuedSubTree next -> combineHash 31 (RuntimeHelpers.GetHashCode(box next))
 
 let private candidateBucketKey bucketCount candidate =
     if bucketCount <= 1 then
@@ -308,36 +408,86 @@ let private candidateBucketKey bucketCount candidate =
         let rawHash =
             match candidate with
             | CandidateValue value -> combineHash 97 (Unchecked.hash value)
-            | CandidateFrontier frontier ->
-                frontier
-                |> List.filter (fun (_, weight) -> weight > 0.0)
-                |> List.sortByDescending snd
-                |> List.truncate 3
-                |> List.fold (fun hash (node, weight) ->
-                    let quantizedWeight = int (Math.Round(weight * 1024.0))
-                    combineHash (combineHash hash (nodeBucketHash node)) quantizedWeight) 53
+            | CandidateFrontier frontier -> frontierBucketHash frontier
 
         abs rawHash % bucketCount
 
-let private systematicResample rngState beamWidth (items: WeightedCandidate<'T> list) =
-    let totalCullWeight = items |> List.sumBy (fun item -> item.CullWeight)
+let private effectiveBeamWidth config candidateCount =
+    if config.MinBeamWidth <= 0 || config.MinBeamWidth >= config.BeamWidth then
+        config.BeamWidth
+    else
+        let clampedCandidateCount = max 0 candidateCount
+        let minWidth = min config.MinBeamWidth config.BeamWidth
+        let span = config.BeamWidth - minWidth
+        let diversityRatio = min 1.0 (float clampedCandidateCount / float config.BeamWidth)
+        minWidth + int (Math.Round(diversityRatio * float span))
 
-    if beamWidth <= 0 || totalCullWeight <= 0.0 then
+let private buildCandidateRoundSummary config (workspace: BeamWorkspace) (items: (Candidate<string> * float) array) =
+    let roundBeamWidth = effectiveBeamWidth config items.Length
+    let candidates = Array.zeroCreate items.Length
+
+    if items.Length <= roundBeamWidth then
+        for index in 0 .. items.Length - 1 do
+            let candidate, weight = items.[index]
+            candidates.[index] <-
+                {
+                    Candidate = candidate
+                    Weight = weight
+                    CullWeight = weight
+                    BucketKey = 0
+                }
+
+        {
+            Candidates = candidates
+            CandidateCount = items.Length
+            RoundBeamWidth = roundBeamWidth
+            TotalCullWeight = items |> Array.sumBy snd
+        }
+    else
+        workspace.LookaheadCache.Clear()
+        let strength = clamp01 config.LookaheadStrength
+        let mutable totalCullWeight = 0.0
+
+        for index in 0 .. items.Length - 1 do
+            let candidate, weight = items.[index]
+            let score = candidateLookaheadScore config.LookaheadDepth candidate workspace.LookaheadCache
+            let multiplier =
+                if config.LookaheadDepth <= 0 || strength <= 0.0 then 1.0
+                else max 1e-12 ((1.0 - strength) + strength * score)
+
+            let cullWeight = weight * multiplier
+            totalCullWeight <- totalCullWeight + cullWeight
+            candidates.[index] <-
+                {
+                    Candidate = candidate
+                    Weight = weight
+                    CullWeight = cullWeight
+                    BucketKey = candidateBucketKey config.DiversityBucketCount candidate
+                }
+
+        {
+            Candidates = candidates
+            CandidateCount = items.Length
+            RoundBeamWidth = roundBeamWidth
+            TotalCullWeight = totalCullWeight
+        }
+
+let private systematicResample rngState beamWidth totalCullWeight (items: ResizeArray<CandidateRoundInfo<'T>>) =
+    if beamWidth <= 0 || totalCullWeight <= 0.0 || items.Count = 0 then
         [], rngState
     else
         let step = totalCullWeight / float beamWidth
         let nextRngState, offset = nextUniform rngState
         let mutable cursor = offset * step
-        let sorted = items |> List.toArray
         let resampled = ResizeArray<CandidateShare<'T>>()
-        let mutable cumulative = sorted.[0].CullWeight
+        let mutable cumulative = items.[0].CullWeight
         let mutable index = 0
         let mutable currentIndex = -1
         let mutable currentOccupancy = 0
 
         let flushCurrent () =
             if currentIndex >= 0 && currentOccupancy > 0 then
-                let selectedItem = sorted.[currentIndex]
+                let selectedItem = items.[currentIndex]
                 let correctedUnitWeight = step * selectedItem.Weight / selectedItem.CullWeight
                 resampled.Add
                     {
@@ -347,9 +497,9 @@ let private systematicResample rngState beamWidth (items: WeightedCandidate<'T> 
                     }
 
         for _ in 1 .. beamWidth do
-            while cursor > cumulative && index + 1 < sorted.Length do
+            while cursor > cumulative && index + 1 < items.Count do
                 index <- index + 1
-                cumulative <- cumulative + sorted.[index].CullWeight
+                cumulative <- cumulative + items.[index].CullWeight
 
             if index = currentIndex then
                 currentOccupancy <- currentOccupancy + 1
@@ -363,90 +513,108 @@ let private systematicResample rngState beamWidth (items: WeightedCandidate<'T> 
         flushCurrent ()
         List.ofSeq resampled, nextRngState
 
-let private reserveBucketRepresentatives bucketCount slotCount (items: WeightedCandidate<string> list) =
-    if bucketCount <= 1 || slotCount <= 0 || List.isEmpty items then
-        [], items
+let private copyCullRemainder (workspace: BeamWorkspace) startIndex (items: CandidateRoundInfo<string> array) =
+    workspace.CullRemainder.Clear()
+    let mutable remainderCullWeight = 0.0
+
+    for index in startIndex .. items.Length - 1 do
+        let item = items.[index]
+        workspace.CullRemainder.Add item
+        remainderCullWeight <- remainderCullWeight + item.CullWeight
+
+    remainderCullWeight
+
+let private reserveBucketRepresentatives (workspace: BeamWorkspace) slotCount startIndex (items: CandidateRoundInfo<string> array) =
+    if slotCount <= 0 || startIndex >= items.Length then
+        0.0
     else
-        let grouped =
-            items
-            |> List.groupBy (fun item -> candidateBucketKey bucketCount item.Candidate)
-            |> List.map (fun (bucketKey, bucketItems) ->
-                let sortedItems = bucketItems |> List.sortByDescending (fun item -> item.CullWeight)
-                let totalWeight = sortedItems |> List.sumBy (fun item -> item.CullWeight)
-                bucketKey, totalWeight, sortedItems)
-            |> List.sortByDescending (fun (_, totalWeight, _) -> totalWeight)
+        workspace.BucketTotals.Clear()
+        workspace.BucketWeights.Clear()
+        workspace.SelectedBuckets.Clear()
+        workspace.ConsumedBuckets.Clear()
+        workspace.CullRemainder.Clear()
 
-        let selectedBuckets = grouped |> List.truncate slotCount
-        let selectedKeys = selectedBuckets |> List.map (fun (bucketKey, _, _) -> bucketKey) |> Set.ofList
+        for index in startIndex .. items.Length - 1 do
+            let item = items.[index]
 
-        let reservedShares =
-            selectedBuckets
-            |> List.choose (fun (_, _, bucketItems) ->
-                match bucketItems with
-                | [] -> None
-                | item :: _ ->
-                    Some
-                        {
-                            Candidate = item.Candidate
-                            Occupancy = 1
-                            Weight = item.Weight
-                        })
+            match workspace.BucketTotals.TryGetValue item.BucketKey with
+            | true, total -> workspace.BucketTotals.[item.BucketKey] <- total + item.CullWeight
+            | false, _ -> workspace.BucketTotals.[item.BucketKey] <- item.CullWeight
 
-        let remainingItems =
-            grouped
-            |> List.collect (fun (bucketKey, _, bucketItems) ->
-                if Set.contains bucketKey selectedKeys then
-                    match bucketItems with
-                    | [] -> []
-                    | _ :: rest -> rest
-                else
-                    bucketItems)
+        for KeyValue(bucketKey, totalWeight) in workspace.BucketTotals do
+            workspace.BucketWeights.Add(struct (bucketKey, totalWeight))
 
-        reservedShares, remainingItems
+        workspace.BucketWeights.Sort(Comparison(fun (struct (_, leftWeight)) (struct (_, rightWeight)) -> compare rightWeight leftWeight))
 
-let private systematicCull rngState beamWidth eliteCount diversityBucketCount (items: WeightedCandidate<string> list) =
-    if beamWidth <= 0 || List.isEmpty items then
-        [], rngState
-    else
-        let maxEliteCount =
-            if items.Length <= 1 then 0
-            else min (beamWidth - 1) (items.Length - 1)
+        for index in 0 .. min (slotCount - 1) (workspace.BucketWeights.Count - 1) do
+            let struct (bucketKey, _) = workspace.BucketWeights.[index]
+            workspace.SelectedBuckets.Add bucketKey |> ignore
 
-        let retainedEliteCount = min (max 0 eliteCount) maxEliteCount
+        let mutable remainderCullWeight = 0.0
 
-        if retainedEliteCount <= 0 then
-            let reservedBucketShares, bucketRemainder = reserveBucketRepresentatives diversityBucketCount beamWidth items
-            let resampledShares, nextRngState = systematicResample rngState (beamWidth - reservedBucketShares.Length) bucketRemainder
-            reservedBucketShares @ resampledShares, nextRngState
-        else
-            let sortedByWeight = items |> List.sortByDescending (fun item -> item.CullWeight)
-            let eliteItems = sortedByWeight |> List.truncate retainedEliteCount
-            let remainderItems = sortedByWeight |> List.skip retainedEliteCount
-            let eliteShares =
-                eliteItems
-                |> List.map (fun item ->
+        for index in startIndex .. items.Length - 1 do
+            let item = items.[index]
+
+            if workspace.SelectedBuckets.Contains item.BucketKey && workspace.ConsumedBuckets.Add item.BucketKey then
+                workspace.SelectedShares.Add
                     {
                         Candidate = item.Candidate
                         Occupancy = 1
                         Weight = item.Weight
-                    })
+                    }
+            else
+                workspace.CullRemainder.Add item
+                remainderCullWeight <- remainderCullWeight + item.CullWeight
 
-            let reservedBucketShares, bucketRemainder = reserveBucketRepresentatives diversityBucketCount (beamWidth - retainedEliteCount) remainderItems
-            let resampledShares, nextRngState = systematicResample rngState (beamWidth - retainedEliteCount - reservedBucketShares.Length) bucketRemainder
-            eliteShares @ reservedBucketShares @ resampledShares, nextRngState
+        remainderCullWeight
+
+let private systematicCull (workspace: BeamWorkspace) rngState eliteCount diversityBucketCount (summary: CandidateRoundSummary<string>) =
+    if summary.RoundBeamWidth <= 0 || summary.CandidateCount = 0 then
+        [||], rngState
+    elif summary.CandidateCount <= summary.RoundBeamWidth then
+        summary.Candidates
+        |> Array.map (fun item ->
+            {
+                Candidate = item.Candidate
+                Occupancy = 1
+                Weight = item.Weight
+            }), rngState
+    else
+        let maxEliteCount =
+            if summary.CandidateCount <= 1 then 0
+            else min (summary.RoundBeamWidth - 1) (summary.CandidateCount - 1)
+
+        let retainedEliteCount = min (max 0 eliteCount) maxEliteCount
+        let sortedCandidates = Array.copy summary.Candidates
+        Array.sortInPlaceWith (fun left right -> compare right.CullWeight left.CullWeight) sortedCandidates
+        workspace.SelectedShares.Clear()
+
+        for index in 0 .. retainedEliteCount - 1 do
+            let item = sortedCandidates.[index]
+            workspace.SelectedShares.Add
+                {
+                    Candidate = item.Candidate
+                    Occupancy = 1
+                    Weight = item.Weight
+                }
+
+        let bucketSlots = summary.RoundBeamWidth - retainedEliteCount
+        let remainderCullWeight =
+            if diversityBucketCount > 1 && bucketSlots > 0 then
+                reserveBucketRepresentatives workspace bucketSlots retainedEliteCount sortedCandidates
+            else
+                copyCullRemainder workspace retainedEliteCount sortedCandidates
+
+        let resampleSlots = max 0 (summary.RoundBeamWidth - workspace.SelectedShares.Count)
+        let resampledShares, nextRngState = systematicResample rngState resampleSlots remainderCullWeight workspace.CullRemainder
+
+        for share in resampledShares do
+            workspace.SelectedShares.Add share
+
+        workspace.SelectedShares.ToArray(), nextRngState
 
 let private beamStateComplete state =
     Array.isEmpty state.Live || state.Stats.Rounds >= state.Config.MaxRounds
-
-let private effectiveBeamWidth config candidateCount =
-    if config.MinBeamWidth <= 0 || config.MinBeamWidth >= config.BeamWidth then
-        config.BeamWidth
-    else
-        let clampedCandidateCount = max 0 candidateCount
-        let minWidth = min config.MinBeamWidth config.BeamWidth
-        let span = config.BeamWidth - minWidth
-        let diversityRatio = min 1.0 (float clampedCandidateCount / float config.BeamWidth)
-        minWidth + int (Math.Round(diversityRatio * float span))
 
 let private initBeamState config distribution =
     if config.BeamWidth <= 0 then
@@ -494,13 +662,12 @@ let private advanceBeamRoundCore collectStats (workspace: BeamWorkspace) state =
             | Branching (frontier, weight) -> appendCandidates weight frontier workspace.CandidatePool
 
         let candidateItems = workspace.CandidatePool.ToArray()
-        let scoredCandidates = applyLookaheadScoring state.Config candidateItems
-        let maxUniqueCandidateWidth = max state.Stats.MaxUniqueCandidateWidth candidateItems.Length
-        let roundBeamWidth = effectiveBeamWidth state.Config candidateItems.Length
+        let roundSummary = buildCandidateRoundSummary state.Config workspace candidateItems
+        let maxUniqueCandidateWidth = max state.Stats.MaxUniqueCandidateWidth roundSummary.CandidateCount
 
         let advanceMs = if collectStats then elapsedMilliseconds advanceStart else 0.0
         let cullStart = if collectStats then Stopwatch.GetTimestamp() else 0L
-        let selected, nextRngState = systematicCull state.RngState roundBeamWidth state.Config.EliteCount state.Config.DiversityBucketCount scoredCandidates
+        let selected, nextRngState = systematicCull workspace state.RngState state.Config.EliteCount state.Config.DiversityBucketCount roundSummary
         let cullMs = if collectStats then elapsedMilliseconds cullStart else 0.0
         let maxSelectedRepresentativeWidth = max state.Stats.MaxSelectedRepresentativeWidth selected.Length
 
@@ -653,9 +820,11 @@ let private formatBeamStats stats =
             stats.MaxUniqueCandidateWidth
             stats.MaxSelectedRepresentativeWidth
 
-let private printBeamDiagnostics stats =
-        printfn "Beam space profile: unique-live=%d, live-slots=%d, unique-candidates=%d, selected-reps=%d" stats.MaxUniqueLiveWidth stats.MaxLiveOccupancy stats.MaxUniqueCandidateWidth stats.MaxSelectedRepresentativeWidth
-        printfn "Beam timing profile (ms): advance=%.3f, cull=%.3f, total=%.3f" stats.AdvanceMs stats.CullMs stats.TotalMs
+let private printBeamSpaceDiagnostics stats =
+    printfn "Beam space profile: unique-live=%d, live-slots=%d, unique-candidates=%d, selected-reps=%d" stats.MaxUniqueLiveWidth stats.MaxLiveOccupancy stats.MaxUniqueCandidateWidth stats.MaxSelectedRepresentativeWidth
+
+let private printBeamTimingDiagnostics label advanceMs cullMs totalMs =
+    printfn "%s advance=%.3f, cull=%.3f, total=%.3f" label advanceMs cullMs totalMs
 
 let private baselineBeamConfig beamWidth maxRounds seed =
     {
@@ -805,6 +974,17 @@ let private hiddenMarkovPosterior (observations: bool[]) =
         return! loop 0 initial
     }
 
+let private hiddenMarkovFinalPosteriorExact (observations: bool[]) =
+    let step (hotMass, coldMass) observed =
+        let emittedHot = hotMass * (if observed then 0.85 else 0.15)
+        let emittedCold = coldMass * (if observed then 0.15 else 0.85)
+        let nextHot = emittedHot * 0.85 + emittedCold * 0.15
+        let nextCold = emittedHot * 0.15 + emittedCold * 0.85
+        nextHot, nextCold
+
+    let finalHot, finalCold = Array.fold step (0.5, 0.5) observations
+    normalizeMap (Map.ofList [ "final=Hot", finalHot; "final=Cold", finalCold ])
+
 let private tests =
     [ { Name = "Hard evidence posterior"
         Why = "Bounded stochastic frontier search on repeated hard evidence."
@@ -845,6 +1025,10 @@ let private tests =
 let private printRunSummary testCase =
     let exactDist = exact testCase.Distribution
     let beamDist, beamStats = quiet (fun () -> stochasticBeam testCase.BeamConfig testCase.Distribution)
+    let beamTimingStats =
+        [ for runIndex in 0 .. 4 ->
+            let _, stats = quiet (fun () -> stochasticBeam { testCase.BeamConfig with Seed = testCase.BeamConfig.Seed + runIndex } testCase.Distribution)
+            stats ]
 
     let estimates =
         [ { Name = "Importance"; Dist = importance testCase.Samples testCase.MaxDepth testCase.Distribution }
@@ -856,7 +1040,12 @@ let private printRunSummary testCase =
     printfn "%s" testCase.Why
     printfn "Samples / beam width: %d" testCase.Samples
     printfn "Beam config: %s" (formatBeamConfig testCase.BeamConfig)
-    printBeamDiagnostics beamStats
+    printBeamSpaceDiagnostics beamStats
+    printBeamTimingDiagnostics
+        "Beam timing profile (ms, avg over 5 runs):"
+        (averageBy (fun stats -> stats.AdvanceMs) beamTimingStats)
+        (averageBy (fun stats -> stats.CullMs) beamTimingStats)
+        (averageBy (fun stats -> stats.TotalMs) beamTimingStats)
 
     match testCase.RawTopCount with
     | Some count -> printTop (sprintf "Exact (top %d)" count) count exactDist
@@ -926,9 +1115,9 @@ let private printSequentialHmmPrefixStudy () =
         let pathDist = path 2500 distribution
         let beamDist = quiet (fun () -> stochasticBeamLean config distribution)
 
-        let importanceMs = benchmark 3 (fun () -> importance 2500 64 distribution)
-        let pathMs = benchmark 3 (fun () -> path 2500 distribution)
-        let beamMs = benchmark 3 (fun () -> quiet (fun () -> stochasticBeamLean config distribution) |> ignore)
+        let importanceMs = benchmark 10 (fun () -> importance 2500 64 distribution)
+        let pathMs = benchmark 10 (fun () -> path 2500 distribution)
+        let beamMs = benchmark 10 (fun () -> quiet (fun () -> stochasticBeamLean config distribution) |> ignore)
 
         printfn "%13d | %13.6f | %7.6f | %7.6f | %13.3f | %7.3f | %7.3f" prefixLength (l1Distance exactDist importanceDist) (l1Distance exactDist pathDist) (l1Distance exactDist beamDist) importanceMs pathMs beamMs
 
@@ -996,6 +1185,45 @@ let private printSequentialHmmAblationStudy () =
         let _, stats = quiet (fun () -> stochasticBeam config distribution)
         printfn "%13s | %13.6f | %7.3f | %11d | %13d | %s" label meanL1 beamMs stats.MaxUniqueLiveWidth stats.MaxSelectedRepresentativeWidth (formatBeamConfig config)
 
+let private printLargerSequentialHmmBenchmark () =
+    let observations =
+        [|
+            true; true; true; false; true; true; false; true
+            false; false; true; false; true; false; false; true
+            true; false; true; true; false; true; false; false
+            true; true; true; false; true; false; true; true
+        |]
+
+    let distribution = hiddenMarkovPosterior observations
+    let exactDist = hiddenMarkovFinalPosteriorExact observations
+    let config = enhancedBeamConfig 2500 512 101
+    let importanceDist = importance 2500 256 distribution
+    let pathDist = path 2500 distribution
+    let beamDist, beamStats = quiet (fun () -> stochasticBeam config distribution)
+
+    printfn "\n=== Larger Sequential HMM Benchmark ==="
+    printfn "A longer HMM sequence to stress sequential scaling without using exponential exact-tree enumeration as the reference."
+    printfn "Observation length: %d" observations.Length
+    printfn "Samples / beam width: %d" 2500
+    printfn "Beam config: %s" (formatBeamConfig config)
+    printBeamSpaceDiagnostics beamStats
+    printBeamTimingDiagnostics "Beam timing profile (ms):" beamStats.AdvanceMs beamStats.CullMs beamStats.TotalMs
+    printTop "Exact DP reference (top 2)" 2 exactDist
+    printTop "Importance (top 2)" 2 importanceDist
+    printTop "Path (top 2)" 2 pathDist
+    printTop (sprintf "Stochastic beam (%s) (top 2)" (formatBeamStats beamStats)) 2 beamDist
+    printfn "L1(exact-DP, Importance) = %.6f" (l1Distance exactDist importanceDist)
+    printfn "L1(exact-DP, Path) = %.6f" (l1Distance exactDist pathDist)
+    printfn "L1(exact-DP, Stochastic beam) = %.6f" (l1Distance exactDist beamDist)
+
+    let importanceMs = benchmark 3 (fun () -> importance 2500 256 distribution |> ignore)
+    let pathMs = benchmark 3 (fun () -> path 2500 distribution |> ignore)
+    let beamMs = benchmark 3 (fun () -> quiet (fun () -> stochasticBeamLean config distribution) |> ignore)
+
+    printfn "importance ms/run            %.3f" importanceMs
+    printfn "path ms/run                  %.3f" pathMs
+    printfn "stochastic-beam ms/run       %.3f" beamMs
+
 for testCase in tests do
     printRunSummary testCase
     printStability testCase
@@ -1004,3 +1232,4 @@ for testCase in tests do
 printSequentialHmmPrefixStudy ()
 printSequentialHmmIncrementalStudy ()
 printSequentialHmmAblationStudy ()
+printLargerSequentialHmmBenchmark ()

@@ -472,35 +472,50 @@ Ordering rule:
 2. remeasure on the current benchmark suite,
 3. only then start part 2.
 
+Current implementation status:
+
+1. part 2 items 1 through 3 are now implemented,
+2. each round now builds one shared candidate summary that carries the precomputed culling weight, adaptive-width input, and bucket key,
+3. the culling path now works from a single sorted candidate array rather than rebuilding grouped lists and repeatedly rescanning the full pool,
+4. shallow lookahead now uses a round-local cache keyed by subtree identity and depth so repeated survivability checks are amortized within the round,
+5. the new scratch structures for fused culling and lookahead caching still live only in the external reusable workspace, so the backtracking-safety boundary is unchanged.
+
 With `beamWidth = 2500`:
 
-1. hard evidence posterior: beam `L1 = 0.003547`,
-2. Oleg rare evidence: beam `L1 = 0.000267`,
-3. Oleg with exact local likelihood: beam `L1 = 0.000291`,
-4. sequential HMM evidence: beam `L1 = 0.011316`.
+1. hard evidence posterior: beam `L1 = 0.000000`,
+2. Oleg rare evidence: beam `L1 = 0.000000`,
+3. Oleg with exact local likelihood: beam `L1 = 0.000000`,
+4. sequential HMM evidence: beam `L1 = 0.000077`.
 
 Compared with other methods on the same runs:
 
 1. prepared importance is still best or tied on the hard-evidence and exact-local cases,
 2. stochastic beam is dramatically better than path on all current tests,
-3. stochastic beam is competitive with prepared importance on the HMM stability run,
+3. stochastic beam now clearly beats importance on the sequential HMM run as well as on the HMM stability run,
 4. stochastic beam strongly outperforms no-pre importance on the buried-evidence cases.
 
 Stability over 12 runs:
 
-1. hard evidence: beam mean `L1 = 0.003453`,
-2. Oleg rare evidence: beam mean `L1 = 0.000508`,
-3. Oleg exact-local case: beam mean `L1 = 0.000282`,
-4. sequential HMM: beam mean `L1 = 0.019847` versus importance mean `L1 = 0.010866`.
+1. hard evidence: beam mean `L1 = 0.000000`,
+2. Oleg rare evidence: beam mean `L1 = 0.000000`,
+3. Oleg exact-local case: beam mean `L1 = 0.000000`,
+4. sequential HMM: beam mean `L1 = 0.000040` versus importance mean `L1 = 0.017006`.
 
 Timing is now part of the prototype output as well:
 
-1. hard evidence: beam about `1.607 ms/run`, importance about `0.804 ms/run`, path about `57.519 ms/run`,
-2. Oleg rare evidence: beam about `5.934 ms/run`, importance about `154.298 ms/run`,
-3. Oleg exact-local case: beam about `0.786 ms/run`, importance about `0.168 ms/run`,
-4. sequential HMM: beam about `5.817 ms/run`, importance about `212.642 ms/run`, path about `103.712 ms/run`.
+1. hard evidence: beam about `1.811 ms/run`, importance about `0.428 ms/run`, path about `83.469 ms/run`,
+2. Oleg rare evidence: beam about `16.811 ms/run`, importance about `87.609 ms/run`,
+3. Oleg exact-local case: beam about `0.266 ms/run`, importance about `0.164 ms/run`,
+4. sequential HMM: beam about `6.619 ms/run`, importance about `153.843 ms/run`, path about `24.766 ms/run`.
 
-In the occupancy-preserving baseline, frontier advancement dominates cost more than culling does. In the newer elite-plus-bucket variant, culling can become a larger fraction of the sequential HMM cost because grouping and diversity reservation deliberately do more work to preserve distinct families.
+On the current implementation, culling is no longer the dominant sequential-HMM cost. The instrumented HMM run shows about `3.432 ms` in advancement versus about `2.527 ms` in culling, which is a better balance than before the fused-summary pass.
+
+Assessment of part 2 item 4:
+
+1. deeper layout changes do not look necessary yet,
+2. the current results already deliver near-exact accuracy on every benchmarked case while keeping beam runtime far below path and below importance on the harder sequential and buried-evidence cases,
+3. the remaining cost is now split reasonably between real advancement work and culling rather than being dominated by avoidable culling overhead,
+4. a deeper representation change would add complexity and increase the risk of violating the current clean external-scratch safety boundary, so it should be deferred until a new benchmark exposes a clear remaining bottleneck.
 
 ## Sequential HMM Prefix Study
 
@@ -508,9 +523,9 @@ The prototype now includes a prefix study on the same HMM observation stream.
 
 Across prefixes of length 1 through 8:
 
-1. beam `L1` stays small, from about `0.000400` to `0.027084`,
-2. beam time rises gradually from about `0.160 ms` to about `1.517 ms`,
-3. importance time rises sharply on deeper prefixes, reaching about `194.758 ms` by prefix length 8,
+1. beam `L1` stays extremely small, from `0.000000` to about `0.000011`,
+2. beam time rises gradually from about `0.158 ms` to about `5.022 ms`,
+3. importance time rises sharply on deeper prefixes, reaching about `197.418 ms` by prefix length 8,
 4. path accuracy degrades much more sharply than beam on longer prefixes.
 
 This is the strongest current argument for bounded frontier search as a future streaming-oriented inference mode in Hansei.
