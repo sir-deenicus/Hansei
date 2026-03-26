@@ -260,3 +260,4 @@ paket-files/
 __pycache__/
 *.pyc
 changes.txt
+.vscode/settings.json

@@ -35,6 +35,37 @@ So the practical answer is:
 1. no new hooks are required for the first experiment,
 2. some hooks will likely be required if we want this to become a general or semi-general inference mode.
 
+## Motivation And Use Cases
+
+The point of this module is not to become a smaller copy of Infer.NET, Figaro, or a generic graphical-model toolkit.
+
+The point is to give Hansei an explicit structural inference layer for the classes of models where we already know more than the generic continuation-tree search can exploit.
+
+That matters for four reasons:
+
+1. it keeps the modeling experience Hansei-adjacent instead of forcing a separate graph-toolkit mindset,
+2. it allows exact or near-exact specialized inference for recurring finite structured families,
+3. it creates a place to attach multiple optimized evaluators to one explicit representation,
+4. it is broad enough to support non-toy standalone tasks while still being narrow enough to optimize aggressively.
+
+The intended value is therefore not maximal expressiveness.
+
+The intended value is a better performance and clarity tradeoff on structured finite problems that Hansei users are likely to care about.
+
+Representative use cases for this family include:
+
+1. HMMs and other finite-state sequential latent-variable models,
+2. tagging, decoding, and simple finite-state dynamic Bayesian networks,
+3. rooted local-sensor trees and finite hierarchical diagnosis models,
+4. exact collapsed submodels embedded inside a larger Hansei computation,
+5. stand-alone dynamic-programming style problems such as finite-state segmentation and decoding.
+
+So the role of this module is:
+
+1. keep Hansei good at general probabilistic programming,
+2. add an explicit compiled-inference path for restricted structured models,
+3. avoid broadening so far that we are effectively rebuilding a general graph-probabilistic system.
+
 ## Why Dynamic Programming Can Help
 
 The current stochastic beam driver operates on Hansei's weighted continuation frontiers. That is a good fit when:
@@ -225,6 +256,16 @@ Phase 2:
 2. if yes, design explicit opt-in hooks for finite variables, local factors, and stable state keys,
 3. keep the DAG backend separate from the ordinary continuation-tree path until the semantics are clear.
 
+## Closeout Note
+
+The prototype phase is effectively complete. The system now supports unified graph IR (chains and trees), log-space exact/max inference, structural sharing, and a specialized trie-based segmentation engine with prepared contexts and OOV fallback.
+
+Specific performance refinements for the beam-search path remain as optional "Pass 3" candidates, to be pursued only if larger-trie benchmarks justify the additional complexity:
+
+1. **Bounded Partial Selection**: Replace the full `System.Array.Sort` in each beam step with a partial-selection strategy (e.g., Quickselect or a min-priority queue) to find the top $K$ candidates in $O(N)$ instead of $O(N \log N)$.
+2. **Frontier Buffer Reuse**: Switch from per-iteration `ResizeArray` cycles to a pair of pre-allocated, reusable array buffers for the current and next frontiers to eliminate allocation churn.
+3. **In-place Pruning**: Implement the beam pruning directly on these shared buffers to minimize data movement between steps.
+
 ### Syntax Adjustment Plan
 
 The next syntax pass should make the opt-in structured subset feel more like Hansei without pretending it is ordinary unrestricted Hansei.
@@ -342,18 +383,21 @@ What is supported now:
 3. chain models with one latent state variable per step and local observations,
 4. rooted branching models where every non-root node has exactly one parent,
 5. local conditional factors of the form parent-state to child-state, plus local observation likelihoods,
-6. root-marginal style queries.
+6. arbitrary single-node queries on the current rooted-tree family via two-pass message passing,
+7. log-space internal inference for both sum-product and max-product on the currently supported families,
+8. compiled evaluation contexts for the currently supported chain and rooted-tree families so static adjacency and weight tables are built once and reused across repeated evaluations,
+9. an explicit `BeliefPropagation` engine name for the currently supported families, where it is exact and aliases the same sum-product recurrences used on chains and rooted trees.
 
 What is not supported yet:
 
 1. arbitrary multi-parent Bayesian-network nodes,
 2. general factor graphs with factors over several variables,
 3. shared-child DAG structure with true reconvergence,
-4. arbitrary query variables or arbitrary marginals over subsets of nodes,
+4. arbitrary marginals over subsets of nodes,
 5. continuous latent state,
 6. unrestricted higher-order Hansei control flow compiled automatically.
 
-So the honest description is: Phase 1 currently supports finite discrete chains and rooted single-parent branching graphs, not a fully general DAG language.
+So the honest description is: Phase 1 currently supports finite discrete chains and rooted single-parent branching graphs with arbitrary single-node queries, not a fully general DAG language.
 
 ## Compared To A Graph DSL
 
@@ -404,13 +448,94 @@ Current code status:
 1. the prototype now has an explicit engine layer over the compiled graph family,
 2. `SumProduct` is implemented for both finite chains and rooted single-parent branching graphs,
 3. `MaxProduct` is also implemented over those same structures,
-4. the old posterior-only helpers are now thin wrappers over that engine dispatch rather than separate semantic cores.
+4. `BeliefPropagation` is now also exposed explicitly for the currently supported families; on chains and rooted trees it is exact and currently aliases `SumProduct`,
+5. the inference recurrences now run in log-space internally for numerical stability on longer sequences,
+6. rooted-tree queries are no longer restricted to the root; the current prototype now uses a two-pass message scheme for arbitrary single-node queries,
+7. rooted-tree structural sharing now uses interned structural subtree keys rather than canonical string signatures,
+8. the rooted-tree evaluator now also caches repeated parent-pattern child-contribution and prefix/suffix arrays by subtree key, not only upward messages,
+9. both supported families now have compiled evaluation contexts: chains precompute order and flattened log-transition tables, while rooted trees precompute node lookup, adjacency, local fragments, and subtree-key interning,
+10. the prototype now also exposes an internal prepared-DAG path for repeated evaluation without rebuilding the compiled context each call,
+11. benchmark output now includes lightweight compiled-context diagnostics, including prepared-context use counts for both supported families and rooted-tree cache-hit counts for upward-message and parent-pattern reuse,
+12. the old posterior-only helpers are now thin wrappers over that engine dispatch rather than separate semantic cores,
+13. a first trie-oriented segmentation prototype now also exists as a separate specialized exact DP over lexicon matches and string positions; it is intentionally not yet folded into the generic `FiniteDag` family because that segmentation surface naturally wants reconvergent position-sharing the current generic IR does not yet model,
+14. the trie prototype now reports both top-k posterior segmentations and top-k MAP paths, exposes an internal Hansei-facing exact adapter that returns a `ProbabilitySpace<string>` from lexicon entries plus an observed string, and includes a beam-style approximate inference mode for larger lexicon-first segmentation problems,
+15. the larger trie benchmark now also exercises explicit word-transition / boundary costs inside the specialized trie engine.
+14. the trie prototype now prints explicit top-k segmentation output and includes both a small toy example and a larger ambiguous benchmark with a bigger lexicon and longer observed string.
 
 So Bayesian posterior inference is already happening in both surface forms today:
 
 1. `chain { ... }` compiles to a finite chain and runs exact sum-product,
 2. `dag { ... }` compiles to the current rooted-tree graph family and runs exact sum-product,
-3. both can now also run max-product / MAP style decoding on the same compiled structure.
+3. both can now also run exact belief propagation under the explicit `BeliefPropagation` engine name, which is equivalent to `SumProduct` on the currently supported structures,
+4. both can now also run max-product / MAP style decoding on the same compiled structure.
+
+Important boundary:
+
+1. current `BeliefPropagation` is exact only because the supported graph families are chains and rooted trees,
+2. loopy belief propagation is not implemented yet,
+3. implementing loopy BP would require a richer graph family with multi-parent factors or true shared-child reconvergence plus an iterative message schedule,
+4. for the trie segmentation engine specifically, a beam-style approximation is a better fit than loopy BP because the underlying segmentation graph is acyclic and already admits exact dynamic programming.
+
+Beam approximate inference in the trie prototype:
+
+1. beam search is a standard search and decoding heuristic, especially common in NLP, speech recognition, and other sequence-model settings,
+2. it does not change the local scoring model; it changes how much of the search space we keep at once,
+3. at each left-to-right expansion step, we keep only the top `beamWidth` partial segmentations by score and drop the rest,
+4. this makes it approximate rather than exact, because discarded partial paths can still contain posterior mass,
+5. for this trie engine it is a pragmatic approximation because the underlying segmentation graph is acyclic and naturally enumerated left-to-right, so beam pruning is simple to add and easy to interpret.
+
+Near-term planned extensions beyond the currently implemented scope:
+
+1. extend structural sharing beyond the current rooted-tree subtree-key and parent-pattern caches if additional graph families justify it,
+2. a specialized finite-state segmentation / decoding IR, with the concrete representation choice between tries and weighted finite automata still to be decided based on which abstraction gives the cleaner modeling and inference story.
+
+## Trie Versus WFA Decision Process
+
+The segmentation / decoding IR should not start from abstract elegance. It should start from the kind of model we want to write and the kind of sharing we want the backend to exploit.
+
+Use a trie-oriented IR when:
+
+1. the main object is a lexicon or prefix dictionary,
+2. states are naturally described as string position plus prefix node,
+3. weights are mostly local to token completion, token boundaries, or small context features,
+4. interpretability and straightforward Hansei-adjacent modeling matter more than classical automata closure properties.
+
+Use a weighted finite automaton when:
+
+1. the model is already naturally an automaton or transducer,
+2. we need composition, minimization, epsilon-style structure, or other automata-theoretic operations,
+3. states are better viewed as machine states than lexicon-prefix states,
+4. we expect to interoperate with existing weighted-automata style data or algorithms.
+
+Practical decision rule:
+
+1. if the first serious target is word segmentation from a lexicon with boundary costs or small language-model features, start with a trie,
+2. if the first serious target already looks like weighted-path decoding over an automaton, start with a WFA,
+3. if both look plausible, prefer the representation with the simpler explicit state summary and the clearer message-passing story inside the current finite-DAG backend.
+
+Current recommendation:
+
+1. begin with the lexicon-first framing and therefore prototype the segmentation IR as trie-oriented unless an immediate automata use case forces WFA first,
+2. preserve the design so trie states could later be lowered into a more automata-like backend if that becomes useful.
+
+How tries fit Hansei usage:
+
+1. tries are useful when a Hansei model contains a finite lexicon-first subproblem such as exact segmentation or decoding over an observed string,
+2. the trie segmenter can then be called as an exact submodel adapter rather than forcing the full Hansei continuation tree to rediscover lexicon structure implicitly,
+3. boundary costs in this setting mean extra local weights at token boundaries, for example preferring fewer or more plausible word breaks or adding a simple language-model-style penalty or reward when one token ends and the next begins,
+4. word-transition costs are one concrete boundary-cost form: the score for choosing the next token can depend on the previous token, which turns the trie DP state into position plus the previous chosen word context,
+5. the current prototype now exposes composable boundary-cost templates, including a flat per-break factor and a simple bigram word model, so examples can express both a generic break penalty and specific token-to-token preferences without baking one monolithic scorer into the DP,
+6. out-of-vocabulary handling is now available as an opt-in fallback inside the same trie DP: when no lexicon token starts at the current position, the engine can emit a bounded unknown chunk instead of failing immediately,
+7. the current balanced default for that fallback is a bounded unknown chunk scored by a unigram character model plus a token-level penalty; this is more robust than a character bigram default when we do not have much character-level training signal,
+8. a character bigram unknown scorer is also available, but it is deliberately optional because it introduces more parameters and more sparsity pressure than the unigram version,
+9. an end-of-unknown score is now also supported and is useful when we want the model to care about how an unknown chunk terminates, for example preferring unknown spans that end in a letter over spans that end in a digit or punctuation mark,
+10. character-class defaults are now also supported for the unknown scorer, which lets us assign different fallback preferences to letters, digits, punctuation, whitespace, and other symbols without having to specify a separate weight for every possible character.
+
+How tries fit Hansei-adjacent modeling:
+
+1. the trie acts as an explicit finite state summary for lexicon-driven segmentation, which is exactly the kind of structure the generic continuation tree does not expose directly,
+2. the outer Hansei story can treat the trie segmenter as a specialized exact submodel over a finite observed string and a finite lexicon,
+3. this keeps the semantics explicit: we are not claiming arbitrary Hansei programs become tries automatically, only that certain lexicon-first subproblems can be compiled into a trie-oriented DP cleanly.
 
 ## Adapter Back Into Hansei Proper
 
@@ -445,6 +570,8 @@ Instead:
 
 1. prove the value of a DAG evaluator on one or two known graph families,
 2. measure the speedup relative to beam and importance,
-3. only then decide which structural hooks are worth exposing.
+3. add structural sharing only where semantic keys are explicit and stable,
+4. prototype a segmentation / decoding IR as a concrete non-toy stand-alone use case,
+5. only then decide which broader structural hooks are worth exposing.
 
 That keeps the risk low and prevents us from adding generic hooks before we know exactly which information the optimizer truly needs.
