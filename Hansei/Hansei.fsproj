@@ -1,4 +1,4 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
     <TargetFrameworks>net50</TargetFrameworks>
@@ -7,7 +7,7 @@
     <GeneratePackageOnBuild>true</GeneratePackageOnBuild>
   </PropertyGroup>
 
-  <ItemGroup>
+  <ItemGroup><Compile Include="ProbabilitySpace.fs" /><Compile Include="Exploration.fs" /><Compile Include="DynamicProgrammingDag.fs" />
     <None Include="Archived\hansei-v2.fsx" />
     <None Include="Archived\importanceSamplerTest.fsx" />
     <None Include="Archived\marvel.fsx" />
@@ -16,8 +16,7 @@
     <None Include="original-sampler.txt" />
     <None Include="history.txt" />
     <None Include="importance-sampler-test.fsx" />
-    <Compile Include="Hansei-lazy-list.fs" />
-    <Compile Include="Hansei.fs" />
+    <Compile Include="Hansei.fs" /><Compile Include="IncrementalSamplers.fs" /><Compile Include="StochasticBeam.fs" /><Compile Include="Distributions.fs" /><Compile Include="TrieSegmentation.fs" /><Compile Include="Model.fs" />
   </ItemGroup>
 
   <ItemGroup>

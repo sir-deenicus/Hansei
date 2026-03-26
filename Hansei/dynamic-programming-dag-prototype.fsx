@@ -6,8 +6,9 @@
 
 open System
 open System.Diagnostics
-open Hansei.Core.List
-open Hansei.Core.List.Distributions
+open Hansei.Probability
+open Hansei.Distributions
+open Hansei
 
 type private FiniteNode<'State> =
     {

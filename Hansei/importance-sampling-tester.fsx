@@ -8,8 +8,9 @@
 open System
 open System.Diagnostics
 open System.IO
-open Hansei.Core.List
-open Hansei.Core.List.Distributions
+open Hansei
+open Hansei.Probability
+open Hansei.Distributions
 
 type SamplerResult =
     { Name: string; Dist: Map<string, float> }
@@ -235,7 +236,7 @@ let private olegGateFactored () =
         if not gate then
             return 0
         else
-            do! Hansei.Core.List.exact_local_observe ((=) (3, 5)) (randomPos ())
+            do! exact_local_observe ((=) (3, 5)) (randomPos ())
             return 1
     }
 
@@ -322,3 +323,89 @@ for testCase in tests do
     printRunSummary testCase
     printStability testCase
     printSpeed testCase
+
+let private printIncrementalState label topCount snapshot completed remaining =
+    printfn "%s completed=%d remaining=%d" label completed remaining
+    printTop (sprintf "%s snapshot" label) topCount (normalizedValues snapshot)
+
+let private printStateStep label topCount hasSnapshot completed remaining snapshot =
+    printfn "%s completed=%d remaining=%d hasSnapshot=%b" label completed remaining hasSnapshot
+
+    if hasSnapshot then
+        printTop (sprintf "%s snapshot" label) topCount (normalizedValues snapshot)
+
+let private printIncrementalApiDemo () =
+    let demo = List.head tests
+    let chunkSize = 500
+
+    printfn "\n=== Incremental API Demo ==="
+    printfn "Test case: %s" demo.Name
+    printfn "Chunk size: %d" chunkSize
+
+    let importanceState = Model.ImportanceSamplesState(demo.Distribution, demo.Samples, demo.MaxDepth, preExplore = false)
+    printfn "\nRaw importance state-machine API"
+    printfn "  let state0 = Model.ImportanceSamplesState(distr, samples, maxDepth, preExplore = false)"
+    printfn "  let state1 = state0.Advance(chunkSize)"
+    printfn "  let snapshot = state1.Snapshot()"
+
+    let importanceState1 = importanceState.Advance(chunkSize)
+    let importanceState2 = importanceState1.Advance(chunkSize)
+    printIncrementalState "importance state1" 5 (importanceState1.Snapshot()) importanceState1.CompletedSamples importanceState1.RemainingSamples
+    printIncrementalState "importance state2" 5 (importanceState2.Snapshot()) importanceState2.CompletedSamples importanceState2.RemainingSamples
+
+    printfn "\nYielded importance snapshot API"
+    printfn "  Model.ImportanceSamplesState(distr, samples, maxDepth, preExplore = false).ToSnapshotSeq(chunkSize)"
+
+    (Model.ImportanceSamplesState(demo.Distribution, demo.Samples, demo.MaxDepth, preExplore = false)).ToSnapshotSeq(chunkSize)
+    |> Seq.truncate 3
+    |> Seq.iteri (fun index snapshot ->
+        printTop (sprintf "importance seq snapshot %d" (index + 1)) 5 (normalizedValues snapshot))
+
+    printfn "\nYielded importance state API"
+    printfn "  Model.ImportanceSamplesState(distr, samples, maxDepth, preExplore = false).ToStateSeq(chunkSize)"
+
+    (Model.ImportanceSamplesState(demo.Distribution, demo.Samples, demo.MaxDepth, preExplore = false)).ToStateSeq(chunkSize)
+    |> Seq.truncate 3
+    |> Seq.iteri (fun index state ->
+        printStateStep
+            (sprintf "importance seq state %d" (index + 1))
+            5
+            state.HasSnapshot
+            state.CompletedSamples
+            state.RemainingSamples
+            (state.Snapshot()))
+
+    let pathState = Model.PathSampleState(demo.Distribution, demo.Samples)
+    printfn "\nRaw path state-machine API"
+    printfn "  let state0 = Model.PathSampleState(distr, samples)"
+    printfn "  let state1 = state0.Advance(chunkSize)"
+    printfn "  let snapshot = state1.Snapshot()"
+
+    let pathState1 = pathState.Advance(chunkSize)
+    let pathState2 = pathState1.Advance(chunkSize)
+    printIncrementalState "path state1" 5 (pathState1.Snapshot()) pathState1.CompletedSamples pathState1.RemainingSamples
+    printIncrementalState "path state2" 5 (pathState2.Snapshot()) pathState2.CompletedSamples pathState2.RemainingSamples
+
+    printfn "\nYielded path snapshot API"
+    printfn "  Model.PathSampleState(distr, samples).ToSnapshotSeq(chunkSize)"
+
+    (Model.PathSampleState(demo.Distribution, demo.Samples)).ToSnapshotSeq(chunkSize)
+    |> Seq.truncate 3
+    |> Seq.iteri (fun index snapshot ->
+        printTop (sprintf "path seq snapshot %d" (index + 1)) 5 (normalizedValues snapshot))
+
+    printfn "\nYielded path state API"
+    printfn "  Model.PathSampleState(distr, samples).ToStateSeq(chunkSize)"
+
+    (Model.PathSampleState(demo.Distribution, demo.Samples)).ToStateSeq(chunkSize)
+    |> Seq.truncate 3
+    |> Seq.iteri (fun index state ->
+        printStateStep
+            (sprintf "path seq state %d" (index + 1))
+            5
+            state.HasSnapshot
+            state.CompletedSamples
+            state.RemainingSamples
+            (state.Snapshot()))
+
+printIncrementalApiDemo ()

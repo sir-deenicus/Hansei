@@ -10,8 +10,9 @@ open System.Collections.Generic
 open System.Diagnostics
 open System.IO
 open System.Runtime.CompilerServices
-open Hansei.Core.List
-open Hansei.Core.List.Distributions
+open Hansei
+open Hansei.Probability
+open Hansei.Distributions
 open Hansei.Utils
 
 type SamplerResult =
@@ -930,7 +931,7 @@ let private olegGateFactored () =
         if not gate then
             return 0
         else
-            do! Hansei.Core.List.exact_local_observe ((=) (3, 5)) (randomPos ())
+            do! exact_local_observe ((=) (3, 5)) (randomPos ())
             return 1
     }
 

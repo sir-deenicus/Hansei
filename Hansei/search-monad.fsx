@@ -886,26 +886,26 @@ module TTree3 =
 
 open TTree2
 
-let rec ss i = search { 
+let rec searchStream i = search { 
     let! a = choices ([true;false])
     if a then return i
-    else return! (ss (i+1))
+    else return! (searchStream (i+1))
 } 
 
-ss 0 |> explore None (Some 10) 
+searchStream 0 |> explore None (Some 10) 
 |> LazyList.takeOrMax 10  |> LazyList.toList
 
 open TTree2
 //Using list yields to Stack overflow here
-let rec ss2 i = search { 
+let rec searchStream2 i = search { 
     yield i
     yield -i
-    return! ss2 (i+1)
+    return! searchStream2 (i+1)
 } 
 
-let qz = ss2 0 
+let searchStreamOutput = searchStream2 0 
 
-qz |> explore (Some 500) (Some 10)  
+searchStreamOutput |> explore (Some 500) (Some 10)  
 |> LazyList.takeOrMax 100
 |> LazyList.toList
 
