@@ -26,7 +26,7 @@ The continuation project provides the machinery underpinning the later Hansei la
 
 ### Continuations
 
-`Continuations.fs` defines ordinary and delimited continuations. Continuations grant explicit control over the remainder of a computation, allowing probabilistic and nondeterministic branching to be reified rather than immediately executed. Suspension and re-entry become natural operations. Everything that follows — where a computation is treated as an explicit tree of suspended futures rather than something that simply runs to completion — rests on this foundation.
+`Continuations.fs` defines ordinary and delimited continuations. Continuations grant explicit control over the remainder of a computation, allowing probabilistic and nondeterministic branching to be reified rather than immediately executed. Suspension and re-entry become natural operations. These ideas inform the design of the probability layer, though `ProbabilitySpace` itself uses a defunctionalized encoding (explicit thunk trees) rather than the `Cont<'T,'S,'R>` type directly — see the note in the `ProbabilitySpace<'T>` section below.
 
 ### Lazy and fair nondeterminism
 
@@ -43,6 +43,10 @@ The continuation project provides the machinery underpinning the later Hansei la
 The weighted probabilistic layer, built atop the continuation substrate.
 
 ### `ProbabilitySpace<'T>`
+
+**Encoding note.** Despite the historical comment in the source file, `ProbabilitySpace` does *not* use a continuation monad. The `Cont<'T,'S,'R>` type exists in `Hansei.Continuation` but is not referenced by the probability layer. What we use instead is a **lazy weighted tree** (a weighted rose tree with optional memoization): each node is either a terminal `Value` or a `ContinuedSubTree` — an optionally-memoizing thunk `Memo<ProbabilitySpace<'T>>` (`unit -> ProbabilitySpace<'T>`) that is forced on demand. Monadic bind is `reflect`, which takes the current tree and a plain Kleisli arrow `k: 'a -> ProbabilitySpace<'b>` and wraps `k` into new thunks at every branch.
+
+The precise relationship to continuations: this is **defunctionalized continuation-passing style**. Oleg's original OCaml Hansei used `shift`/`reset` (genuine delimited continuations) to capture "the rest of the computation" at each choice point. Our `reflect` does the same job but *directly constructs the thunk tree* instead of reifying a captured continuation. The two representations are isomorphic; ours trades the abstraction of delimited control for a concrete data structure that is easier to inspect, memoize, checkpoint, and feed to multiple exploration engines.
 
 `ProbabilitySpace.fs` defines the core representation. Values inhabit a weighted tree rather than being returned bare; subtrees can be suspended and forced later; `dist { ... }` composes weighted choices lazily. The key primitives include `distribution` for weighted alternatives, `always`/`exactly` for deterministic values, `fail` for impossible branches, `observe` for hard constraints, `factor` for soft weighting, and `exact_local_likelihood` for analytically collapsing a local submodel into a single factor.
 
